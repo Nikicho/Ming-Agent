@@ -1,7 +1,15 @@
 """Ming CLI - interactive chat interface."""
 
 import asyncio
+import io
 import sys
+
+# Fix Windows console encoding for CJK characters
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
 
 from rich.console import Console
 from rich.markdown import Markdown
