@@ -47,11 +47,19 @@ class LoopDetector:
             self._warned = False
 
         if self._consecutive_identical >= self.block_threshold:
-            logger.warning(f"Loop blocked: {tool_name} called {self._consecutive_identical}x identically")
+            logger.warning(
+                "Loop blocked: %s called %sx identically",
+                tool_name,
+                self._consecutive_identical,
+            )
             return "block"
 
         if self._consecutive_identical >= self.warn_threshold and not self._warned:
-            logger.warning(f"Loop warning: {tool_name} called {self._consecutive_identical}x identically")
+            logger.warning(
+                "Loop warning: %s called %sx identically",
+                tool_name,
+                self._consecutive_identical,
+            )
             self._warned = True
             return "warn"
 

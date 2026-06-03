@@ -21,7 +21,9 @@ class BashTool(Tool):
         return (
             "Execute a shell command and return its output. "
             "Use for running programs, scripts, git commands, etc. "
-            "Commands run in the project working directory."
+            "Commands run in the project working directory. "
+            "On Windows this uses the default shell (usually cmd.exe), so prefer "
+            "Windows-compatible commands such as dir, type, cd /d, and python."
         )
 
     @property
@@ -64,7 +66,12 @@ class BashTool(Tool):
 
             if len(output) > MAX_OUTPUT_CHARS:
                 half = MAX_OUTPUT_CHARS // 2
-                output = output[:half] + f"\n\n... ({len(output) - MAX_OUTPUT_CHARS} chars truncated) ...\n\n" + output[-half:]
+                omitted = len(output) - MAX_OUTPUT_CHARS
+                output = (
+                    output[:half]
+                    + f"\n\n... ({omitted} chars truncated) ...\n\n"
+                    + output[-half:]
+                )
 
             if proc.returncode != 0:
                 output = f"Exit code: {proc.returncode}\n{output}"
@@ -73,4 +80,7 @@ class BashTool(Tool):
             return ToolResult(output=output)
 
         except asyncio.TimeoutError:
-            return ToolResult(output=f"Command timed out after {timeout}s: {command}", is_error=True)
+            return ToolResult(
+                output=f"Command timed out after {timeout}s: {command}",
+                is_error=True,
+            )

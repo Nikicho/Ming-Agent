@@ -6,7 +6,7 @@ Provides a unified interface for calling any LLM provider.
 from typing import Any
 
 import litellm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ming.config import LLMConfig
 
@@ -27,7 +27,8 @@ class LLMResponse(BaseModel):
 
     content: str
     finish_reason: str  # "stop", "tool_calls", "length"
-    usage: dict[str, int] = {}  # prompt_tokens, completion_tokens, total_tokens
+    # prompt_tokens, completion_tokens, total_tokens
+    usage: dict[str, int] = Field(default_factory=dict)
     tool_calls: list[dict[str, Any]] | None = None
 
 
@@ -46,23 +47,32 @@ async def call_llm(
     Returns:
         LLMResponse with content and metadata.
     """
-    # Build kwargs
-    kwargs: dict[str, Any] = {
-        "model": config.model,
-        "messages": [m.model_dump(exclude_none=True) for m in messages],
-        "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
-    }
+    models = [config.model, *config.fallback_models]
+    last_error: Exception | None = None
 
-    if config.api_key:
-        kwargs["api_key"] = config.api_key
-    if config.api_base:
-        kwargs["api_base"] = config.api_base
-    if tools:
-        kwargs["tools"] = tools
+    for model in models:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [m.model_dump(exclude_none=True) for m in messages],
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+        }
 
-    # Call LiteLLM (async)
-    response = await litellm.acompletion(**kwargs)
+        if config.api_key:
+            kwargs["api_key"] = config.api_key
+        if config.api_base:
+            kwargs["api_base"] = config.api_base
+        if tools:
+            kwargs["tools"] = tools
+
+        try:
+            response = await litellm.acompletion(**kwargs)
+            break
+        except Exception as exc:
+            last_error = exc
+    else:
+        assert last_error is not None
+        raise last_error
 
     # Parse response
     choice = response.choices[0]

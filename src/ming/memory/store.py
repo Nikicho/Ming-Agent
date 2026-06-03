@@ -5,9 +5,7 @@ Provides retrieval for context assembly.
 """
 
 import logging
-import os
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -17,7 +15,14 @@ logger = logging.getLogger("ming")
 class MemoryEntry:
     """A single memory entry."""
 
-    def __init__(self, name: str, description: str, mem_type: str, content: str, file_path: str = ""):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        mem_type: str,
+        content: str,
+        file_path: str = "",
+    ):
         self.name = name
         self.description = description
         self.type = mem_type

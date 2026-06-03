@@ -127,7 +127,6 @@ class ContextManager:
         ]
 
         try:
-            from ming.config import LLMConfig
             response = await llm_call(
                 messages=summary_messages,
                 config=llm_call.__self__ if hasattr(llm_call, '__self__') else None,
@@ -142,7 +141,14 @@ class ContextManager:
         # Replace old messages with summary
         summary_msg = Message(
             role="system",
-            content=f"[Conversation summary (compacted from {len(old_messages)} messages)]\n{summary_text}",
+            content=(
+                f"[Conversation summary (compacted from {len(old_messages)} messages)]\n"
+                f"{summary_text}"
+            ),
         )
         self.dialog_history = [summary_msg] + recent_messages
-        logger.info(f"  Compacted: {len(old_messages)} old → 1 summary + {len(recent_messages)} recent")
+        logger.info(
+            "  Compacted: %s old → 1 summary + %s recent",
+            len(old_messages),
+            len(recent_messages),
+        )

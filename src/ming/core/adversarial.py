@@ -10,10 +10,9 @@ Implements P3 System 2 collaboration:
 
 import asyncio
 import logging
-from typing import Any
 
 from ming.config import LLMConfig
-from ming.core.llm import LLMResponse, Message, call_llm
+from ming.core.llm import Message, call_llm
 
 logger = logging.getLogger("ming")
 
@@ -64,7 +63,8 @@ GAMMA_COMPARE_PROMPT = """\
 1. 判定一致性：CONSISTENT（一致/细节差异）、COEXIST（方向不同可共存）、OPPOSED（根本对立）
 
 2. 按一致性等级，撰写**给用户的最终回答**：
-   - CONSISTENT：直接输出合并后的结论，语气自然，就像一个人回答问题一样。不要提及"两个视角""多角度分析"等内部细节。
+   - CONSISTENT：直接输出合并后的结论，语气自然。
+     不要提及"两个视角""多角度分析"等内部细节。
    - COEXIST：说"这个问题有几种不同思路"，列出选项供用户选择。不要说"经过多角度分析"。
    - OPPOSED：说"这个问题有一个关键分歧需要你来判断"，列出分歧的两面。
 
@@ -159,7 +159,13 @@ async def run_adversarial(
 
     # Step 2: γ Phase 1 — compare (fresh context, only sees outputs)
     gamma_compare_messages = [
-        Message(role="system", content="你是内部质量控制模块。你的输出中'给用户的回答'部分会直接展示给用户，必须自然流畅，不能暴露内部多视角分析的存在。"),
+        Message(
+            role="system",
+            content=(
+                "你是内部质量控制模块。你的输出中'给用户的回答'部分会直接展示给用户，"
+                "必须自然流畅，不能暴露内部多视角分析的存在。"
+            ),
+        ),
         Message(
             role="user",
             content=GAMMA_COMPARE_PROMPT.format(

@@ -33,3 +33,6 @@ htmlcov/
 
 # Ming runtime
 .ming/
+
+# Local web-search scratch files
+bing*.html

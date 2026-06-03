@@ -2,246 +2,221 @@
 
 > 知常曰明，不知常，妄作凶 —— 《道德经》
 
-An open-source, model-agnostic AI agent that augments human System 2 thinking.
+Ming 是一个本地运行的、model-agnostic 的 Agent 原型。当前版本重点验证核心链路：工具调用、四层 Context、认知路由、α/β/γ 对抗分析、T1/T3 核验、显式记忆、Automaticity、Experience Pool、Web Research、权限门禁、工具进展评估和每轮运行记录。
 
-Ming is not just another chatbot wrapper — it implements biomorphic cognitive architecture with adversarial collaboration, automaticity learning, and multi-layer context management.
+当前状态不是完整“自主进化 Agent”，而是可体验的工程版本。P5 主动性状态机、持久 Context、完整 Dreaming、完整 Git 回滚、MCP/Skills 生态接入仍属于后续阶段。
 
-## Quick Start
+## 安装
 
-### 1. Install
-
-```bash
+```powershell
 cd D:\Ming
 python -m venv .venv
-.venv\Scripts\activate       # Windows
-# source .venv/bin/activate  # Linux/Mac
-pip install -e .
+.\.venv\Scripts\activate
+pip install -e .[dev]
 ```
 
-### 2. Configure
+## 配置
 
-Create `config/local.yaml` (gitignored, safe for secrets):
+推荐创建 `config/local.yaml`，这个文件已被 `.gitignore` 忽略：
 
 ```yaml
 llm:
-  model: "deepseek/deepseek-v4-flash"   # or deepseek/deepseek-v4-pro, openai/gpt-4o, etc.
-  api_key: "your-api-key-here"
+  model: "deepseek/deepseek-chat"
+  fallback_models:
+    - "openai/gpt-4o-mini"
+  api_key: "your-api-key"
 ```
 
-Or use environment variable:
+也可以用环境变量：
 
-```bash
-export MING_LLM_API_KEY="your-key"
-export MING_LLM_MODEL="deepseek/deepseek-v4-flash"
+```powershell
+$env:MING_LLM_API_KEY="your-api-key"
+$env:MING_LLM_MODEL="deepseek/deepseek-chat"
 ```
 
-### 3. Run
+## 使用
 
-```bash
-# Single question
-python -m ming "帮我写一个 hello world"
+单轮请求：
 
-# Interactive mode
+```powershell
+python -m ming "帮我创建一个 hello.py 并运行它"
+```
+
+交互模式：
+
+```powershell
 python -m ming
 ```
 
-## Features
+帮助：
 
-### 🔧 Tool Use (Agentic Loop)
-
-Ming can use tools to complete tasks, not just talk about them:
-
-- **bash** — Execute shell commands
-- **file_read** — Read files with line numbers
-- **file_write** — Create or overwrite files
-- **file_edit** — Surgical string replacement in files
-
-Ming loops automatically: reason → call tool → read result → reason again → until done.
-
-```
-You: 创建一个 Python 文件算斐波那契数列前10个，然后运行它
-Ming: [calls file_write to create fib.py]
-      [calls bash to run python fib.py]
-      完成！输出：0 1 1 2 3 5 8 13 21 34
+```powershell
+python -m ming --help
 ```
 
-### 🛡️ 守门人 Gate (Adversarial Routing)
+交互命令：
 
-Every task is evaluated by 7 rules. If any fires, Ming upgrades from single-agent to adversarial mode:
+| 命令 | 作用 |
+|------|------|
+| `/quit` | 退出 |
+| `/clear` | 清空当前对话 |
+| `/status` | 查看 token 估算、记忆数量、行为模式数量 |
+| `/debug` | 切换 debug 日志 |
+| `/compact` | 手动触发旧对话压缩 |
+| `/rewind` | 移除最近一轮对话上下文 |
+| `/trace` | 查看最近一轮 trace 文件路径 |
+| `/checkpoint` | 查看最近 checkpoint 文件路径 |
 
-| Rule | Trigger |
-|------|---------|
-| R1 | Irreversible operations (delete, drop, force push) |
-| R2 | Architectural changes (schema, core principles) |
-| R3 | Cross-module impact (≥5 files) |
-| R4 | Rich context (≥30K tokens, Fork cache pays off) |
-| R5 | User explicitly requests review |
-| R6 | Historical divergence on similar tasks |
-| R7 | Low Automaticity (unfamiliar task type) |
+## 当前已实现
 
-### ⚔️ Adversarial Collaboration (α/β/γ)
+### Agent Loop
 
-When Gate triggers adversarial mode:
+`Agent` 会循环执行：LLM 推理 → tool call → 工具执行 → 工具结果回喂 → 继续推理，直到模型不再请求工具。内置工具包括：
 
-1. **Fork** — Two agents (α and β) independently analyze the same problem
-2. **α** sees "决策分析者" prompt, uses dialectical reasoning
-3. **β** sees "独立分析" prompt — **does NOT know α exists** (T4 hard constraint)
-4. **γ Phase 1** — Fresh-context comparison of α/β outputs
-5. **γ Phase 2** — Divergence resolution (only if fundamentally opposed)
+- `bash`：执行 shell 命令。Windows 下使用默认 shell，通常是 `cmd.exe`，优先使用 `dir`、`type`、`cd /d`、`python` 等 Windows 兼容命令。
+- `file_read`：读取文件并带行号返回。
+- `file_write`：创建或覆盖文件。
+- `file_edit`：用唯一精确字符串替换编辑文件。
+- `web_search`：搜索网页，返回结构化 `title/url/snippet/score`。
+- `web_fetch`：抓取 URL 并提取可读正文。
 
-Results:
-- **CONSISTENT** → Merged output, user sees a normal response (architecture hidden)
-- **COEXIST** → Options presented for user to choose
-- **OPPOSED** → Divergence diagnosed, user makes the call
+`web_search` 支持按环境变量选择 provider：
 
-### 📊 Automaticity (Learning from Experience)
+- `TAVILY_API_KEY`：优先使用 Tavily。
+- `EXA_API_KEY`：其次使用 Exa。
+- 无 API key：回退到 DuckDuckGo Lite HTML 解析。
 
-Ming tracks how "automatic" each task type should be:
+联网研究时优先使用 `web_search` + `web_fetch`，不要用 `bash` 硬爬搜索页。
 
-- **High automaticity** (0.8+): Direct execution, minimal verification
-- **Medium** (0.3-0.8): Standard reasoning with checks
-- **Low** (<0.3): Full deliberation, may trigger adversarial mode
+### 动态工具选择
 
-Automaticity updates based on outcomes:
-- β independently agrees with α → ↑↑↑ big increase
-- β finds blind spot α missed → ↓↓↓ big decrease
-- Human rejects output → ↓↓↓↓ maximum decrease
+Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 tool schema 噪音：
 
-Stored in `.ming/automaticity.json`, persists across sessions.
+- 搜索、网页、URL 类请求优先暴露 `web_search`、`web_fetch` 和少量必要文件工具。
+- 显式“记住……”类请求默认不暴露外部工具，避免无意义工具调用。
+- 普通工程任务仍可使用本地文件和 shell 工具。
 
-### 📝 Context Management (Four-Layer Model)
+### PermissionGate
 
-Context window organized for cache efficiency:
+`PermissionGate` 是真正的工具门禁，和认知路由 `Gate` 分开。当前会阻断高风险 shell 命令，例如 `git reset --hard`、`git push --force`、`rm -rf`、`rmdir /s`、`format`、`drop database` 等。
 
-| Layer | Content | Stability |
-|-------|---------|-----------|
-| **Base** | System prompt, T2 bias checklist | Never changes |
-| **Session** | Memories, behavior patterns | Stable within session |
-| **Dialog** | Conversation history, tool outputs | Grows per turn |
-| **Instant** | Current input, Gate/Fork injections | Fresh each turn |
+被阻断的工具调用会以 `[Permission denied]` 形式回喂给模型，让模型换成可撤销、可审查的方案。当前版本还没有交互式审批弹窗；需要危险操作时，应由用户明确手动执行或后续接入审批机制。
 
-**Auto-compaction**: When context exceeds 50%, old tool outputs are pruned (no LLM cost), then old dialog is summarized. Safety net at 85% prevents overflow.
+### T1/T3 核验
 
-### 🧠 Memory System
+- 非工具型回答会在输出前跑一次 T1 CoVe 自检。
+- 使用工具生成或修改工件后，会跑一次 T3 fresh-context 核验，检查工具结果是否支持最终答复。
 
-File-based persistent memory in `.ming/memory/`:
+### ToolEvent + ProgressAssessment
 
-```bash
-You: 记住我喜欢用 pytest 而不是 unittest
-Ming: [saves to .ming/memory/]
-# Next session, Ming loads this preference automatically
+每次工具调用会生成 `ToolEvent`，记录工具名、状态、输出长度、证据数量和进展类型。`ProgressAssessment` 会判断这一步是否推进任务：
+
+- `new_evidence`：拿到了有效证据。
+- `no_signal`：空输出、短输出或失败。
+- `artifact_noise`：产生大量内容但没有结构化证据。
+- `unknown`：有输出但还无法判断。
+
+连续多次 `no_signal/artifact_noise` 会停止本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略循环。
+
+这些事件会保存到 `.ming/traces/<turn_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
+
+### TODO / Notepad / Checkpoint
+
+每轮请求会自动生成一份轻量运行工作台：
+
+- `.ming/scratch/<turn_id>/notes.md`：记录用户请求和工具调用观察。
+- `.ming/traces/<turn_id>.json`：记录工具事件、进展类型和最终输出。
+- `.ming/checkpoints/<turn_id>/checkpoint.json`：保存当前消息、TODO、trace 路径和 notepad 路径。
+
+当前 checkpoint 主要用于复盘和为后续断点续跑打基础；完整 resume 命令还在后续阶段。
+
+### 认知路由 + 对抗分析
+
+每轮输入都会经过当前名为 `Gate` 的认知路由器。这里的 Gate 不是业界常说的审批/门禁，当前更准确地说是认知路由器；真正的工具门禁由 `PermissionGate` 负责。命中以下情况会升到对抗档：
+
+- 不可逆操作，例如删除、强推、硬重置。
+- 架构性修改。
+- 多文件/跨模块影响。
+- context 足够大。
+- 用户显式要求再检查、对抗、independent review。
+- Experience Pool 发现相似任务历史上出现过分歧。
+- Automaticity 较低。
+
+对抗档会并行运行 α/β 两个独立分析，再由 γ 比较并收敛。
+
+### 记忆与经验
+
+- 显式记忆：用户说“记住……”时会写入 `.ming/memory/*.md`。
+- Automaticity：按行为模式维护熟练度，存储在 `.ming/automaticity.json`。
+- Experience Pool：每轮记录 tier signal，存储在 `.ming/experience.jsonl`；相似任务如果历史上出现过分歧，会触发 Gate 的历史分歧规则。
+
+### Context
+
+Context 按基座层、会话层、对话层组织。超过阈值时会先裁剪旧工具输出，再用 LLM 压缩旧对话。
+
+### LLM fallback
+
+`llm.fallback_models` 会在主模型调用失败时按顺序尝试备用模型。fallback 是 turn-scoped，不会永久切换配置。
+
+## 验证
+
+运行测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-### 🔄 Error Recovery
+当前测试覆盖：
 
-**Five-level error handling**:
+- 显式记忆写入。
+- T1 输出前自检。
+- T3 工具结果核验。
+- LLM fallback。
+- CLI help。
+- Windows shell 描述。
+- Experience Pool 历史分歧检索。
+- Web search / fetch 结构化输出。
+- ProgressAssessment 停止无增益工具循环。
+- PermissionGate 阻断高风险 shell 命令。
+- 动态工具选择。
+- 每轮 trace/checkpoint/notepad/TODO 落盘。
+- 默认日志不进入 debug 模式。
 
-| Level | What | Recovery |
-|-------|------|----------|
-| L1 | Tool failure | Auto-retry → LLM reasons about fix |
-| L2 | Reasoning error | Re-enter loop → escalate to adversarial |
-| L3 | β/γ crash | Degrade to single-agent |
-| L4 | API down | Retry → fallback provider |
-| L5 | Loop/repetition | Fingerprint detection → ceiling → human |
+## 用力测试场景
 
-**Loop detection**: SHA-256 fingerprinting of tool calls. 3 identical calls → warning, 5 → blocked.
+详见 [docs/experience-scenarios.md](docs/experience-scenarios.md)。建议先从“Windows 工具循环压力测试”和“对抗档架构审查”开始。
 
-**Ceiling**: Configurable iteration limit (default 50) + wall-clock timeout (default 300s).
+## 后续路线
 
-## CLI Commands
+完整路线见 [PLAN.md](PLAN.md)。后续重点包括：Error Recovery、Memory、Context 工作台深化、Observe/Trace 可视化、Checkpoint/Resume、低摩擦交互，以及谨慎接入 MCP/Skills。
 
-| Command | Action |
-|---------|--------|
-| `/quit` | Exit |
-| `/clear` | Clear conversation, start fresh |
-| `/status` | Show token usage, message count, patterns |
-| `/debug` | Toggle debug logging (see Gate decisions, tool calls, etc.) |
+## 项目结构
 
-## Configuration
-
-All settings in `config/default.yaml`, override in `config/local.yaml`:
-
-```yaml
-llm:
-  model: "deepseek/deepseek-v4-flash"
-  api_key: ""
-  temperature: 0.3
-  max_tokens: 4096
-
-context:
-  max_context_tokens: 128000
-  compaction_threshold: 0.50        # primary compaction at 50%
-  compaction_safety_threshold: 0.85 # safety net at 85%
-
-agent:
-  max_iterations: 50    # L5 ceiling per turn
-  max_seconds: 300      # wall-clock timeout
-  max_cost_per_turn: 0  # 0 = unlimited
-```
-
-### Supported Models (via LiteLLM)
-
-```yaml
-# DeepSeek
-model: "deepseek/deepseek-v4-flash"
-model: "deepseek/deepseek-v4-pro"
-
-# OpenAI
-model: "openai/gpt-4o"
-model: "openai/o4-mini"
-
-# Anthropic
-model: "anthropic/claude-sonnet-4-20250514"
-
-# 300+ more via LiteLLM...
-```
-
-## Architecture
-
-Ming implements a biomorphic cognitive architecture inspired by brain mechanisms:
-
-```
-User Input
-  → Context Assembly (thalamus: four-layer model)
-  → Gate Evaluation (ACC: 7 trigger rules)
-  → Single Mode: α_LOOP (PFC: reason + tools + T0-T3 metacognition)
-     OR
-  → Adversarial Mode: Fork α/β → γ Convergence (P3: institutional opposition)
-  → Output (LLM natural formatting + γ merge)
-  → Feedback (Automaticity update + memory encoding)
-```
-
-For detailed design docs, see the [design document](../Obsidian%20Vault/自主进化Agent研究/Ming%20架构设计文档.md).
-
-## Project Structure
-
-```
+```text
 src/ming/
-├── cli.py                   # Interactive CLI
-├── config.py                # Three-layer config system
+├── cli.py
+├── config.py
 ├── core/
-│   ├── agent.py             # Main agent: orchestrates all subsystems
-│   ├── llm.py               # LiteLLM unified interface
-│   ├── gate.py              # 守门人 (7 trigger rules)
-│   ├── automaticity.py      # Behavior patterns + learning
-│   ├── adversarial.py       # α/β Fork + γ convergence
-│   └── loop_detection.py    # SHA-256 fingerprint loop detection
+│   ├── agent.py
+│   ├── adversarial.py
+│   ├── automaticity.py
+│   ├── gate.py
+│   ├── llm.py
+│   ├── loop_detection.py
+│   ├── notepad.py
+│   ├── permission.py
+│   ├── progress.py
+│   ├── todo.py
+│   ├── tool_selection.py
+│   └── trace.py
 ├── context/
-│   └── manager.py           # Four-layer context + compaction
+│   └── manager.py
 ├── memory/
-│   └── store.py             # File-based persistent memory
+│   ├── experience.py
+│   └── store.py
 └── tools/
-    ├── base.py              # Tool base class + registry
-    ├── bash.py              # Shell execution
-    └── file.py              # File read/write/edit
+    ├── base.py
+    ├── bash.py
+    ├── file.py
+    └── web.py
 ```
-
-## License
-
-MIT
-
-## Credits
-
-Designed with insights from Claude Code, Codex, Clowder-AI, and OpenClaw.
-
-Named after 《道德经》: 知常曰明 — "To understand the eternal is to be enlightened."

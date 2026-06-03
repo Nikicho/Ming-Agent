@@ -5,7 +5,6 @@ Evaluates 7 trigger rules. If any fires, the task is escalated to adversarial mo
 
 import logging
 import re
-from typing import Any
 
 logger = logging.getLogger("ming")
 
@@ -87,7 +86,14 @@ class Gate:
             triggered.append(f"R4:上下文充裕({context_tokens}tok)")
 
         # Rule 5: Explicit user request
-        explicit_keywords = ["再审一遍", "对抗", "双agent", "multi-agent", "independent review", "再检查"]
+        explicit_keywords = [
+            "再审一遍",
+            "对抗",
+            "双agent",
+            "multi-agent",
+            "independent review",
+            "再检查",
+        ]
         for kw in explicit_keywords:
             if kw in input_lower:
                 triggered.append("R5:人类显式")

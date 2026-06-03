@@ -64,8 +64,18 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def names(self) -> list[str]:
+        return list(self._tools.keys())
+
     def all_schemas(self) -> list[dict[str, Any]]:
         return [t.to_openai_schema() for t in self._tools.values()]
+
+    def schemas_for(self, names: list[str]) -> list[dict[str, Any]]:
+        return [
+            self._tools[name].to_openai_schema()
+            for name in names
+            if name in self._tools
+        ]
 
     async def execute(self, name: str, arguments: str) -> ToolResult:
         """Execute a tool by name with JSON arguments string."""
@@ -79,4 +89,7 @@ class ToolRegistry:
         try:
             return await tool.execute(**kwargs)
         except Exception as e:
-            return ToolResult(output=f"Tool execution error: {type(e).__name__}: {e}", is_error=True)
+            return ToolResult(
+                output=f"Tool execution error: {type(e).__name__}: {e}",
+                is_error=True,
+            )

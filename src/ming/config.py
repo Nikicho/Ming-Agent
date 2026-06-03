@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 class LLMConfig(BaseModel):
     model: str = "deepseek/deepseek-chat"
+    fallback_models: list[str] = Field(default_factory=list)
     api_key: str = ""
     api_base: str = ""
     temperature: float = 0.3
