@@ -1,0 +1,38 @@
+# Ming default configuration
+# Copy to config/local.yaml and override values for your setup.
+# local.yaml is gitignored — safe for API keys.
+
+# LLM Provider
+llm:
+  # LiteLLM model string: "deepseek/deepseek-chat", "openai/gpt-4o", "anthropic/claude-sonnet-4-20250514", etc.
+  model: "deepseek/deepseek-chat"
+  # API key — override in local.yaml, NEVER commit real keys
+  api_key: ""
+  # Optional: base URL override (for self-hosted / proxy)
+  api_base: ""
+  # Temperature (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.3
+  # Max output tokens per LLM call
+  max_tokens: 4096
+
+# Context management
+context:
+  # Max total context tokens (model-dependent, conservative default)
+  max_context_tokens: 128000
+  # Compaction primary threshold (fraction of max)
+  compaction_threshold: 0.50
+  # Compaction safety net threshold
+  compaction_safety_threshold: 0.85
+
+# Agent loop
+agent:
+  # Max iterations per user turn (L5 ceiling)
+  max_iterations: 50
+  # Max wall-clock seconds per user turn
+  max_seconds: 300
+  # Max cost per turn in USD (0 = unlimited)
+  max_cost_per_turn: 0
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
