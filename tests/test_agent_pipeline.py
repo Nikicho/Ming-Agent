@@ -3,8 +3,8 @@ import json
 import pytest
 
 from ming.config import AgentConfig, ContextConfig, LLMConfig, MingConfig
-from ming.core.agent import Agent
-from ming.core.llm import LLMResponse
+from ming.core.agent import Agent, AgentProgressEvent
+from ming.core.llm import LLMResponse, Message
 
 
 def test_explicit_remember_saves_memory(tmp_path, monkeypatch):
@@ -27,6 +27,31 @@ def test_explicit_remember_saves_memory(tmp_path, monkeypatch):
     saved = list((tmp_path / ".ming" / "memory").glob("*.md"))
     assert len(saved) == 1
     assert "pytest" in saved[0].read_text(encoding="utf-8")
+
+
+def test_agent_forget_scope_separates_dialog_session_and_memory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(llm=LLMConfig(model="test-model", api_key="test"))
+
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    agent.context.add_session_context("temporary session note", label="scratch")
+    agent.context.add_message(Message(role="user", content="hello"))
+    agent.memory.save("user_pref", "pytest", "user", "我喜欢 pytest")
+    agent.memory.save("project_note", "module boundary", "project", "src/ming/core")
+
+    cleared = agent.clear_dialog()
+    assert cleared == 1
+    assert agent.context.dialog_history == []
+    assert len(agent.context.session_layer) == 1
+
+    result = agent.forget_scope("session")
+    assert result["session_context_removed"] == 1
+    assert agent.context.session_layer == []
+    assert len(agent.memory.get_all()) == 2
+
+    result = agent.forget_scope("memory")
+    assert result["memory_removed"] == 1
+    assert [entry.type for entry in agent.memory.get_all()] == ["project"]
 
 
 @pytest.mark.asyncio
@@ -131,3 +156,53 @@ async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeyp
 
     assert "工具循环已停止" in result
     assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_agent_emits_summary_progress_events(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=5),
+    )
+    calls = 0
+    events: list[AgentProgressEvent] = []
+
+    async def fake_llm(messages, config, tools=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "file_write",
+                            "arguments": json.dumps({"path": "out.txt", "content": "hello"}),
+                        },
+                    }
+                ],
+            )
+        if calls == 2:
+            return LLMResponse(content="FINAL: 已写入 out.txt", finish_reason="stop")
+        return LLMResponse(content="PASS: 工具结果支持最终答复", finish_reason="stop")
+
+    monkeypatch.setattr("ming.core.agent.call_llm", fake_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path), progress_callback=events.append)
+    result = await agent.chat("创建 out.txt")
+
+    assert result == "已写入 out.txt"
+    assert [event.stage for event in events] == [
+        "context",
+        "route",
+        "llm",
+        "tool",
+        "llm",
+        "verify",
+        "done",
+    ]
+    assert any(event.message == "执行工具 file_write" for event in events)

@@ -57,6 +57,18 @@ class ContextManager:
         """Add a message to dialog history."""
         self.dialog_history.append(message)
 
+    def clear_dialog(self) -> int:
+        """Clear dialog history while preserving base/session context."""
+        removed = len(self.dialog_history)
+        self.dialog_history = []
+        return removed
+
+    def clear_session_context(self) -> int:
+        """Clear session-layer context for the current process only."""
+        removed = len(self.session_layer)
+        self.session_layer = []
+        return removed
+
     def get_messages(self) -> list[Message]:
         """Assemble the full context: base + session + dialog."""
         return self.base_layer + self.session_layer + self.dialog_history

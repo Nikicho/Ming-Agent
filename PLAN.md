@@ -214,25 +214,31 @@
    - 新增 `PermissionGate` 设计。
 
 2. **Context 工作台**
-   - `TodoState`。
-   - `NotepadStore`。
-   - `ToolSelector`。
-   - scope-aware clear/forget 命令设计。
+   - 已落地 `TodoState`。
+   - 已落地 `NotepadStore`。
+   - 已落地 `ToolSelector`。
+   - 已落地 scope-aware `/clear` 与 `/forget session|memory|project`。
 
 3. **Trace + Checkpoint**
-   - `RunTrace`。
-   - `.ming/checkpoints/<turn_id>/`。
-   - `/trace` 和 `/resume` 设计。
+   - 已落地 `RunTrace`。
+   - 已落地 `.ming/checkpoints/<turn_id>/`。
+   - 已落地 `/trace` 与 `/checkpoint`。
+   - 待建设 `/resume`。
 
 4. **Error Recovery 实装**
-   - file snapshot。
-   - `/rollback`。
+   - 已落地 `file_write` / `file_edit` 前 snapshot。
+   - 已落地 `/rollback` 回滚最近一次文件工具变更。
    - T3 fail 后重入 loop。
 
 5. **Memory 升级**
    - 会话摘要自动提取。
    - project memory。
    - stale memory reconsolidation。
+
+6. **低摩擦交互**
+   - 已落地默认缩略 agent-loop 进度。
+   - 已落地 `/details` 展开进度详情。
+   - 已压制默认 LiteLLM/provider 控制台噪音。
 
 ## 验证命令
 

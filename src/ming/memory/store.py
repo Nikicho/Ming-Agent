@@ -118,6 +118,20 @@ class MemoryStore:
         """Return all memory entries."""
         return list(self._entries)
 
+    def delete_by_type(self, mem_type: str) -> int:
+        """Delete persisted memories of the given type."""
+        removed = 0
+        for entry in list(self._entries):
+            if entry.type != mem_type or not entry.file_path:
+                continue
+            path = Path(entry.file_path)
+            if path.exists() and path.is_file():
+                path.unlink()
+                removed += 1
+        if removed:
+            self._load_all()
+        return removed
+
     def get_session_context(self, max_chars: int = 5000) -> str:
         """Build session-layer context string from all memories."""
         if not self._entries:

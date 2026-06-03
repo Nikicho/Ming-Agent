@@ -64,8 +64,13 @@ python -m ming --help
 | `/debug` | 切换 debug 日志 |
 | `/compact` | 手动触发旧对话压缩 |
 | `/rewind` | 移除最近一轮对话上下文 |
+| `/rollback` | 回滚最近一次 `file_write` / `file_edit` 造成的文件变更 |
+| `/forget session` | 从当前进程上下文移除 session 层 |
+| `/forget memory` | 删除持久用户记忆 |
+| `/forget project` | 删除持久 project 类型记忆 |
 | `/trace` | 查看最近一轮 trace 文件路径 |
 | `/checkpoint` | 查看最近 checkpoint 文件路径 |
+| `/details` | 切换 agent-loop 进度详情展示 |
 
 ## 当前已实现
 
@@ -87,6 +92,8 @@ python -m ming --help
 - 无 API key：回退到 DuckDuckGo Lite HTML 解析。
 
 联网研究时优先使用 `web_search` + `web_fetch`，不要用 `bash` 硬爬搜索页。
+
+CLI 默认展示高信号进度，例如“准备上下文”“调用模型”“执行工具 file_write”“执行 T3 核验”。底层 LiteLLM、httpx、asyncio 等 provider 日志默认不刷屏；需要看详细内部日志时使用 `/debug`，需要展开每步参数时使用 `/details`，完整记录仍可通过 `/trace` 查看。
 
 ### 动态工具选择
 
@@ -129,6 +136,16 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 - `.ming/checkpoints/<turn_id>/checkpoint.json`：保存当前消息、TODO、trace 路径和 notepad 路径。
 
 当前 checkpoint 主要用于复盘和为后续断点续跑打基础；完整 resume 命令还在后续阶段。
+
+### Error Recovery
+
+Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
+
+- 如果文件原本存在，`/rollback` 会恢复旧内容。
+- 如果文件是本轮新建，`/rollback` 会删除该文件。
+- snapshot 存储在 `.ming/snapshots/`。
+
+当前回滚只覆盖 Ming 文件工具造成的文本文件变更，不覆盖 `bash` 命令造成的外部副作用。
 
 ### 认知路由 + 对抗分析
 
@@ -181,6 +198,10 @@ Context 按基座层、会话层、对话层组织。超过阈值时会先裁剪
 - 动态工具选择。
 - 每轮 trace/checkpoint/notepad/TODO 落盘。
 - 默认日志不进入 debug 模式。
+- 默认压制 LiteLLM/provider 控制台噪音，改用 agent-loop 缩略进度。
+- `/details` 展开进度详情。
+- `/forget session|memory|project` scope-aware 清理。
+- `/rollback` 回滚最近一次文件工具变更。
 
 ## 用力测试场景
 
@@ -206,6 +227,7 @@ src/ming/
 │   ├── notepad.py
 │   ├── permission.py
 │   ├── progress.py
+│   ├── recovery.py
 │   ├── todo.py
 │   ├── tool_selection.py
 │   └── trace.py

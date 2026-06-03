@@ -9,11 +9,14 @@ Full pipeline per user turn:
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from ming.config import MingConfig, load_config
 from ming.context.manager import ContextManager
@@ -25,6 +28,7 @@ from ming.core.loop_detection import LoopDetector
 from ming.core.notepad import NotepadStore
 from ming.core.permission import PermissionGate
 from ming.core.progress import ProgressTracker, ToolEvent
+from ming.core.recovery import FileSnapshotStore
 from ming.core.todo import TodoState
 from ming.core.tool_selection import ToolSelector
 from ming.core.trace import CheckpointStore, RunTrace, new_turn_id
@@ -36,6 +40,15 @@ from ming.tools.file import FileEditTool, FileReadTool, FileWriteTool
 from ming.tools.web import WebFetchTool, WebSearchTool
 
 logger = logging.getLogger("ming")
+
+
+@dataclass(frozen=True)
+class AgentProgressEvent:
+    """High-signal progress event for user-facing agent-loop display."""
+
+    stage: str
+    message: str
+    detail: str = ""
 
 SYSTEM_PROMPT = """\
 你是 Ming（明），一个增强人类 System 2 思维的 AI 助手。
@@ -70,10 +83,16 @@ def _build_tool_registry(working_dir: str | None = None) -> ToolRegistry:
 class Agent:
     """Ming agent — full pipeline."""
 
-    def __init__(self, config: MingConfig | None = None, working_dir: str | None = None):
+    def __init__(
+        self,
+        config: MingConfig | None = None,
+        working_dir: str | None = None,
+        progress_callback: Callable[[AgentProgressEvent], None] | None = None,
+    ):
         self.config = config or load_config()
         self.working_dir = working_dir
         self.workspace_root = Path(working_dir) if working_dir else Path.cwd()
+        self.progress_callback = progress_callback
         self.tools = _build_tool_registry(working_dir)
 
         # Subsystems
@@ -93,6 +112,7 @@ class Agent:
         self.notepad = NotepadStore(self.workspace_root / ".ming" / "scratch")
         self.checkpoints = CheckpointStore(self.workspace_root / ".ming" / "checkpoints")
         self.trace_root = self.workspace_root / ".ming" / "traces"
+        self.snapshots = FileSnapshotStore(self.workspace_root / ".ming" / "snapshots")
         self.last_trace_path: Path | None = None
         self.last_checkpoint_path: Path | None = None
         self._last_t3_result = ""
@@ -114,6 +134,7 @@ class Agent:
     async def chat(self, user_input: str) -> str:
         """Process user input through the full pipeline."""
         logger.debug(f"User input: {user_input[:100]}...")
+        self._emit_progress("context", "准备上下文")
         trace = RunTrace(new_turn_id(), user_input)
         todo = TodoState.from_user_input(user_input)
         notepad_path = self.notepad.create(trace.turn_id, user_input)
@@ -136,6 +157,8 @@ class Agent:
             has_historical_divergence=self.experience.has_historical_divergence(user_input),
         )
         logger.info(f"Gate decision: {gate_decision}")
+        route_message = "进入对抗分析" if gate_decision.is_adversarial else "使用单核执行"
+        self._emit_progress("route", route_message, detail=str(gate_decision.triggered_rules))
 
         # Route based on gate decision
         if gate_decision.is_adversarial:
@@ -204,6 +227,7 @@ class Agent:
                 await self._run_compaction()
 
             # Call LLM
+            self._emit_progress("llm", f"调用模型，第 {iteration} 轮")
             response: LLMResponse = await call_llm(
                 messages=self.context.get_messages(),
                 config=self.config.llm,
@@ -223,6 +247,7 @@ class Agent:
                     func = tc["function"]
                     tool_name = func["name"]
                     tool_args = func["arguments"]
+                    self._emit_progress("tool", f"执行工具 {tool_name}", detail=tool_args)
 
                     # Loop detection (L5 fingerprint layer)
                     loop_status = self.loop_detector.check(tool_name, tool_args)
@@ -287,8 +312,10 @@ class Agent:
             final_content = self._strip_final_marker(response.content)
 
             if not used_tools:
+                self._emit_progress("verify", "执行 T1 自检")
                 final_content, tier_signal = await self._run_t1_self_check(final_content)
             else:
+                self._emit_progress("verify", "执行 T3 核验")
                 tier_signal = await self._run_t3_fact_check(user_input, final_content)
 
             self.context.add_message(Message(role="assistant", content=final_content))
@@ -303,7 +330,25 @@ class Agent:
         decision = self.permission_gate.evaluate(tool_name, tool_args)
         if not decision.allowed:
             return ToolResult(output=f"[Permission denied] {decision.reason}", is_error=True)
+        if tool_name in {"file_write", "file_edit"}:
+            self._snapshot_file_tool_target(tool_args)
         return await self.tools.execute(tool_name, tool_args)
+
+    def _snapshot_file_tool_target(self, tool_args: str) -> None:
+        try:
+            data = json.loads(tool_args) if tool_args else {}
+        except json.JSONDecodeError:
+            return
+        raw_path = data.get("path")
+        if not raw_path:
+            return
+        path = Path(raw_path)
+        target = path if path.is_absolute() else self.workspace_root / path
+        self.snapshots.snapshot(target)
+
+    def rollback_last_change(self) -> dict[str, int | str]:
+        """Roll back the most recent file_write/file_edit snapshot."""
+        return self.snapshots.rollback_latest()
 
     def _finish_turn(
         self,
@@ -324,7 +369,20 @@ class Agent:
         )
         self.last_trace_path = trace_path
         self.last_checkpoint_path = checkpoint_path
+        self._emit_progress(
+            "done",
+            "完成本轮响应",
+            detail=f"trace={trace_path}; checkpoint={checkpoint_path}",
+        )
         return final_output
+
+    def _emit_progress(self, stage: str, message: str, detail: str = "") -> None:
+        if not self.progress_callback:
+            return
+        try:
+            self.progress_callback(AgentProgressEvent(stage=stage, message=message, detail=detail))
+        except Exception as exc:
+            logger.debug("Progress callback failed: %s", exc)
 
     async def _run_adversarial(self, user_input: str) -> AdversarialResult:
         """Run adversarial mode (α/β Fork + γ convergence)."""
@@ -347,6 +405,21 @@ class Agent:
     async def compact_now(self) -> None:
         """Public CLI hook for manual compaction."""
         await self._run_compaction()
+
+    def clear_dialog(self) -> int:
+        """Clear current dialog while preserving loaded memory/session context."""
+        return self.context.clear_dialog()
+
+    def forget_scope(self, scope: str) -> dict[str, int]:
+        """Forget a scoped set of state without conflating dialog and memory."""
+        normalized = scope.strip().lower()
+        if normalized == "session":
+            return {"session_context_removed": self.context.clear_session_context()}
+        if normalized in {"memory", "memories", "user"}:
+            return {"memory_removed": self.memory.delete_by_type("user")}
+        if normalized == "project":
+            return {"memory_removed": self.memory.delete_by_type("project")}
+        raise ValueError("Unknown forget scope. Use: session, memory, project.")
 
     def rewind_last_turn(self) -> int:
         """Remove the most recent user turn and all messages after it."""

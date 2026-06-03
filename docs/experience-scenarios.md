@@ -1,6 +1,6 @@
 # Ming 用力测试场景
 
-这些场景用于体验当前版本的强项和边界。Ming 默认不开 debug；需要深入看日志时，在交互模式里显式输入 `/debug`。每轮结束后可以用 `/trace` 和 `/checkpoint` 找到本轮运行记录。
+这些场景用于体验当前版本的强项和边界。Ming 默认不开 debug，也不会把 LiteLLM/provider 日志刷到控制台；默认只展示 agent-loop 缩略进度。需要展开每步参数时输入 `/details`，需要深入看内部日志时输入 `/debug`。每轮结束后可以用 `/trace` 和 `/checkpoint` 找到本轮运行记录。
 
 ## 1. Windows 工具循环压力测试
 
@@ -163,8 +163,69 @@ python -m ming "只回复 fallback ok"
 
 观察点：
 
-- `.ming/logs/` 默认应记录 INFO 级别会话信息，不应出现大量 DEBUG 细节。
+- 控制台应展示类似“准备上下文 / 调用模型 / 执行核验”的缩略进度，而不是 LiteLLM completion 明细。
+- `.ming/logs/` 默认记录 INFO 级别会话信息，不应出现大量 DEBUG 细节。
+- 输入 `/details` 后再运行任务，应看到工具参数等详情。
 - 输入 `/debug` 后再运行任务，才应看到更详细的 Ming 内部日志。
+
+## 6.10 Rollback 测试
+
+```text
+创建 scratch/rollback_demo.txt，内容写入 rollback v1
+```
+
+确认文件存在后输入：
+
+```text
+/rollback
+```
+
+观察点：
+
+- 如果文件是本轮新建，`/rollback` 后文件应被删除。
+- `.ming/snapshots/` 应出现 snapshot 文件，并在成功回滚后清理最近 snapshot。
+
+再测试覆盖旧文件：
+
+```text
+创建 scratch/rollback_existing.txt，内容写入 old
+```
+
+然后：
+
+```text
+把 scratch/rollback_existing.txt 改成 new
+/rollback
+```
+
+观察点：
+
+- 文件内容应恢复为 `old`。
+- 该能力只覆盖 `file_write` / `file_edit`，不覆盖 shell 命令副作用。
+
+## 6.11 Scope Forget 测试
+
+先保存一条记忆：
+
+```text
+记住我在 Ming 里喜欢先看 trace
+```
+
+然后：
+
+```text
+/clear
+你记得我刚才的偏好吗？
+/forget memory
+/clear
+你记得我刚才的偏好吗？
+```
+
+观察点：
+
+- `/clear` 只清当前对话，不删除持久记忆。
+- `/forget memory` 删除 user 类型持久记忆。
+- `/forget session` 只清当前进程 session 层，不删磁盘文件。
 
 ## 7. Compaction 测试
 
