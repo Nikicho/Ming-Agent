@@ -90,6 +90,8 @@ class Agent:
 
     async def chat(self, user_input: str) -> str:
         """Process user input through the full pipeline."""
+        logger.debug(f"User input: {user_input[:100]}...")
+
         # Add user message to dialog layer
         self.context.add_message(Message(role="user", content=user_input))
 
@@ -100,18 +102,27 @@ class Agent:
 
         # Gate evaluation
         automaticity = self.automaticity.get_automaticity(user_input)
+        logger.debug(f"Automaticity for input: {automaticity:.2f}")
         gate_decision = self.gate.evaluate(
             user_input=user_input,
             context_tokens=self.context.current_tokens(),
             automaticity=automaticity,
         )
+        logger.info(f"Gate decision: {gate_decision}")
 
         # Route based on gate decision
         if gate_decision.is_adversarial:
-            result = await self._run_adversarial(user_input)
+            logger.info(f"Entering adversarial mode (rules: {gate_decision.triggered_rules})")
+            try:
+                result = await self._run_adversarial(user_input)
+            except Exception as e:
+                logger.error(f"Adversarial mode failed: {e}", exc_info=True)
+                logger.info("Falling back to single-agent mode (L3 recovery)")
+                return await self._run_single(user_input)
             # Update automaticity with tier signal
             self.automaticity.update(user_input, result.tier_signal)
             self.context.add_message(Message(role="assistant", content=result.final_output))
+            logger.info(f"Adversarial result: consistency={result.consistency}, tier={result.tier_signal}")
             return result.final_output
         else:
             return await self._run_single(user_input)

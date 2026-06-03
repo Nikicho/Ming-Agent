@@ -24,15 +24,34 @@ console = Console()
 
 
 def _setup_logging(level: str = "INFO") -> None:
+    from pathlib import Path
+
+    log_dir = Path(".ming") / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # File handler — always DEBUG, persists for debugging
+    from datetime import datetime
+    log_file = log_dir / f"ming_{datetime.now():%Y%m%d_%H%M%S}.log"
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"
+    ))
+
+    # Console handler — user-configured level
+    console_handler = RichHandler(console=console, show_path=False, show_time=False)
+    console_handler.setLevel(getattr(logging, level, logging.INFO))
+
     logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(message)s",
-        handlers=[RichHandler(console=console, show_path=False, show_time=False)],
+        level=logging.DEBUG,
+        handlers=[console_handler, file_handler],
     )
+
     # Suppress noisy third-party loggers
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("litellm").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    for name in ("httpx", "litellm", "httpcore", "openai", "aiohttp"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+    logging.getLogger("ming").info(f"Session log: {log_file}")
 
 
 def print_banner():
