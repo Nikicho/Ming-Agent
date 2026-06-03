@@ -64,3 +64,7 @@ class CheckpointStore:
     def latest(self) -> Path | None:
         checkpoints = sorted(self.root.glob("*/checkpoint.json"), key=lambda p: p.stat().st_mtime)
         return checkpoints[-1] if checkpoints else None
+
+    def load(self, path: str | Path) -> dict[str, Any]:
+        checkpoint_path = Path(path)
+        return json.loads(checkpoint_path.read_text(encoding="utf-8"))

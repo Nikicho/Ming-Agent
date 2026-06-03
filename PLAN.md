@@ -118,23 +118,22 @@
 
 目标：让 Context 不只是“拼 message”，而是可控的信息工作台。
 
-方法论候选：
+已落地：
 
-- 动态拼接 Prompt：按任务、风险、工具、记忆命中动态组装，而不是全量常驻。
-- TODO 管理：把当前目标拆成可观察的 checklist，随执行更新。
+- `ContextAssembler`：显式输入 base/session/dialog/instant/notepad/toolset/pinned evidence。
+- 动态拼接 Prompt：每轮注入 instant context、TODO、Notepad、pinned evidence、toolset。
+- TODO 管理：把多步请求拆成可观察 checklist，并随工具执行推进。
 - 动态选择 Tool：根据任务和阶段选择暴露的工具 schema，减少干扰。
-- NotePad：记录关键事实、假设、证据、阻塞点，供压缩和续跑使用。
+- NotePad：记录用户请求、assumptions、evidence、blockers、tool observations。
 - 压缩机制：tool pruning、结构化摘要、关键证据保留、压缩后校验。
-- 作用域切换：turn/session/project/user/global 的 context 切换和隔离。
-- 清空 Memory/Context：区分 `/clear`、`/forget session`、`/forget project`。
-- 持久 Context：跨 session 冷启动后的 seamless retrieval。
+- 作用域切换：`/scope user,project,global` 控制记忆注入范围。
+- 清空 Memory/Context：区分 `/clear`、`/forget session`、`/forget memory`、`/forget project`。
+- 持久 Context：跨 session 加载 user/project/global memory；`/resume` 可恢复最近 checkpoint context。
 
-短期实现建议：
+剩余改进：
 
-- 增加 `ContextAssembler`，显式输入 base/session/dialog/instant/notepad/toolset。
-- 增加 `TodoState`，进入 agent-loop 前生成，执行中更新。
-- 增加 `ToolSelector`，每轮只暴露相关工具。
-- 增加 `NotepadStore`，默认保存在 `.ming/scratch/<turn_id>/notes.md`。
+- TODO 拆分仍是启发式规则，后续可接 LLM planner。
+- `/resume` 当前恢复最近 checkpoint 的上下文，尚未支持指定 checkpoint_id。
 
 ### 4. Web Research 主线
 
@@ -223,7 +222,7 @@
    - 已落地 `RunTrace`。
    - 已落地 `.ming/checkpoints/<turn_id>/`。
    - 已落地 `/trace` 与 `/checkpoint`。
-   - 待建设 `/resume`。
+   - 已落地 `/resume` 最近 checkpoint 基础恢复。
 
 4. **Error Recovery 实装**
    - 已落地 `file_write` / `file_edit` 前 snapshot。

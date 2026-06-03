@@ -118,6 +118,24 @@ class MemoryStore:
         """Return all memory entries."""
         return list(self._entries)
 
+    def get_by_types(self, mem_types: list[str]) -> list[MemoryEntry]:
+        """Return memories matching the requested scopes/types."""
+        wanted = set(mem_types)
+        return [entry for entry in self._entries if entry.type in wanted]
+
+    def get_scoped_context(self, mem_types: list[str], max_chars: int = 5000) -> str:
+        """Build context from selected memory scopes only."""
+        entries = self.get_by_types(mem_types)
+        parts = []
+        total = 0
+        for entry in entries:
+            text = entry.to_context_string()
+            if total + len(text) > max_chars:
+                break
+            parts.append(text)
+            total += len(text)
+        return "\n\n".join(parts)
+
     def delete_by_type(self, mem_type: str) -> int:
         """Delete persisted memories of the given type."""
         removed = 0

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sys
+from dataclasses import dataclass
 from typing import Sequence
 
 # Fix Windows console encoding for CJK characters
@@ -19,9 +20,15 @@ from rich.panel import Panel
 
 from ming import __version__
 from ming.config import load_config
-from ming.core.agent import Agent, AgentProgressEvent
 
 console = Console()
+
+
+@dataclass(frozen=True)
+class AgentProgressEvent:
+    stage: str
+    message: str
+    detail: str = ""
 
 
 def _setup_logging(level: str = "INFO") -> None:
@@ -109,9 +116,11 @@ def print_banner():
             "  /status  Show session info\n"
             "  /debug   Toggle debug logging\n"
             "  /compact Compact old conversation context\n"
+            "  /resume  Resume latest checkpoint context\n"
             "  /rewind  Remove the last turn from context\n"
             "  /rollback Roll back the latest file tool change\n"
             "  /forget <session|memory|project> Scoped forget\n"
+            "  /scope <user,project,global> Switch active memory scopes\n"
             "  /trace   Show the latest run trace file\n"
             "  /checkpoint Show the latest checkpoint file\n"
             "  /details Toggle detailed progress",
@@ -126,6 +135,8 @@ async def interactive_loop():
     _setup_logging(config.logging.level)
     loop = asyncio.get_running_loop()
     _install_asyncio_exception_filter(loop)
+
+    from ming.core.agent import Agent
 
     if not config.llm.api_key:
         console.print(
@@ -184,6 +195,15 @@ async def interactive_loop():
                     await agent.compact_now()
                     console.print("[dim]Compaction requested.[/dim]\n")
                     continue
+                elif cmd == "/resume":
+                    checkpoint = agent.resume_latest_checkpoint()
+                    if checkpoint is None:
+                        console.print("[dim]No checkpoint found.[/dim]\n")
+                    else:
+                        console.print(
+                            f"[dim]Resumed checkpoint: {checkpoint.get('turn_id')}[/dim]\n"
+                        )
+                    continue
                 elif cmd == "/rewind":
                     removed = agent.rewind_last_turn()
                     console.print(f"[dim]Removed {removed} messages from the last turn.[/dim]\n")
@@ -202,7 +222,23 @@ async def interactive_loop():
                     except ValueError as exc:
                         console.print(f"[yellow]{exc}[/yellow]\n")
                         continue
+                    if parts[1].strip().lower() in {"memory", "memories", "user", "project"}:
+                        agent.set_context_scopes(agent.active_context_scopes)
                     console.print(f"[dim]Forgot: {result}[/dim]\n")
+                    continue
+                elif cmd == "/scope":
+                    parts = user_input.split(maxsplit=1)
+                    scopes = (
+                        [part.strip() for part in parts[1].split(",")]
+                        if len(parts) > 1
+                        else ["user", "project", "global"]
+                    )
+                    try:
+                        result = agent.set_context_scopes(scopes)
+                    except ValueError as exc:
+                        console.print(f"[yellow]{exc}[/yellow]\n")
+                        continue
+                    console.print(f"[dim]Context scopes: {result['active_scopes']}[/dim]\n")
                     continue
                 elif cmd == "/trace":
                     path = agent.last_trace_path
@@ -255,9 +291,11 @@ Interactive commands:
   /status   Show token usage, memory count, and pattern count
   /debug    Toggle debug logging
   /compact  Compact old conversation context
+  /resume   Resume latest checkpoint context
   /rewind   Remove the last turn from context
   /rollback Roll back the latest file_write/file_edit change
   /forget   Scoped forget: /forget session|memory|project
+  /scope    Switch active memory scopes: /scope user,project,global
   /trace    Show the latest run trace file
   /checkpoint Show the latest checkpoint file
   /details  Toggle detailed progress
@@ -278,6 +316,8 @@ def main(argv: Sequence[str] | None = None):
         if not config.llm.api_key:
             print("Error: No API key. Set MING_LLM_API_KEY or config/local.yaml")
             sys.exit(1)
+        from ming.core.agent import Agent
+
         agent = Agent(config)
         response = agent.chat_sync(user_input)
         print(response)

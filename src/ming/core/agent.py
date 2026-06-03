@@ -115,6 +115,7 @@ class Agent:
         self.snapshots = FileSnapshotStore(self.workspace_root / ".ming" / "snapshots")
         self.last_trace_path: Path | None = None
         self.last_checkpoint_path: Path | None = None
+        self.active_context_scopes = ["user", "project", "global"]
         self._last_t3_result = ""
 
         # Initialize context layers
@@ -122,9 +123,7 @@ class Agent:
         self.context.set_base(full_system)
 
         # Load memory into session layer
-        mem_context = self.memory.get_session_context()
-        if mem_context:
-            self.context.add_session_context(mem_context, label="memories")
+        self.set_context_scopes(self.active_context_scopes)
 
     @property
     def messages(self) -> list[Message]:
@@ -138,6 +137,9 @@ class Agent:
         trace = RunTrace(new_turn_id(), user_input)
         todo = TodoState.from_user_input(user_input)
         notepad_path = self.notepad.create(trace.turn_id, user_input)
+        self.notepad.add_assumption(notepad_path, "本轮只把高信号工作台信息注入上下文。")
+        self.context.set_instant_context(self._build_instant_context(user_input))
+        self.context.set_turn_workbench(todo=todo.to_context(), notepad_path=notepad_path)
 
         # Add user message to dialog layer
         self.context.add_message(Message(role="user", content=user_input))
@@ -204,6 +206,11 @@ class Agent:
         self.progress_tracker.reset()
         selected_tool_names = self.tool_selector.select_tool_names(user_input, self.tools.names())
         selected_tool_schemas = self.tools.schemas_for(selected_tool_names)
+        self.context.set_turn_workbench(
+            todo=todo.to_context(),
+            notepad_path=notepad_path,
+            tool_names=selected_tool_names,
+        )
 
         while True:
             iteration += 1
@@ -286,9 +293,24 @@ class Agent:
                     )
                     assessment = self.progress_tracker.record(event)
                     trace.add_tool_event(event)
-                    self.notepad.append(
+                    self.notepad.add_tool_observation(
                         notepad_path,
-                        f"- tool={tool_name} status={event.status} progress={event.progress}",
+                        f"tool={tool_name} status={event.status} progress={event.progress}",
+                    )
+                    if event.status == "error":
+                        self.notepad.add_blocker(
+                            notepad_path,
+                            f"{tool_name}: {result.output[:300]}",
+                        )
+                    elif event.evidence_count > 0:
+                        evidence = f"{tool_name}: {result.output[:500]}"
+                        self.notepad.add_evidence(notepad_path, tool_name, result.output[:500])
+                        self.context.pin_evidence(evidence)
+                    todo.mark_step_completed(tool_name)
+                    self.context.set_turn_workbench(
+                        todo=todo.to_context(),
+                        notepad_path=notepad_path,
+                        tool_names=selected_tool_names,
                     )
 
                     self.context.add_message(Message(
@@ -350,6 +372,24 @@ class Agent:
         """Roll back the most recent file_write/file_edit snapshot."""
         return self.snapshots.rollback_latest()
 
+    def resume_latest_checkpoint(self) -> dict | None:
+        """Restore dialog context from the latest checkpoint."""
+        path = self.checkpoints.latest()
+        if path is None:
+            return None
+        payload = self.checkpoints.load(path)
+        restored = [Message(**message) for message in payload.get("messages", [])]
+        base_content = {message.content for message in self.context.base_layer}
+        self.context.dialog_history = [
+            message
+            for message in restored
+            if not (message.role == "system" and message.content in base_content)
+        ]
+        self.last_checkpoint_path = path
+        trace_path = payload.get("trace_path")
+        self.last_trace_path = Path(trace_path) if trace_path else None
+        return payload
+
     def _finish_turn(
         self,
         final_output: str,
@@ -383,6 +423,12 @@ class Agent:
             self.progress_callback(AgentProgressEvent(stage=stage, message=message, detail=detail))
         except Exception as exc:
             logger.debug("Progress callback failed: %s", exc)
+
+    def _build_instant_context(self, user_input: str) -> str:
+        return (
+            f"当前用户请求：{user_input}\n"
+            "只使用和本轮任务相关的工具、记忆、TODO、Notepad 和 pinned evidence。"
+        )
 
     async def _run_adversarial(self, user_input: str) -> AdversarialResult:
         """Run adversarial mode (α/β Fork + γ convergence)."""
@@ -420,6 +466,20 @@ class Agent:
         if normalized == "project":
             return {"memory_removed": self.memory.delete_by_type("project")}
         raise ValueError("Unknown forget scope. Use: session, memory, project.")
+
+    def set_context_scopes(self, scopes: list[str]) -> dict[str, list[str] | int]:
+        """Switch active memory scopes injected into session context."""
+        allowed = {"user", "project", "global"}
+        normalized = [scope.strip().lower() for scope in scopes if scope.strip()]
+        invalid = [scope for scope in normalized if scope not in allowed]
+        if invalid:
+            raise ValueError("Unknown context scope. Use: user, project, global.")
+        if not normalized:
+            normalized = ["user", "project", "global"]
+        self.active_context_scopes = normalized
+        mem_context = self.memory.get_scoped_context(normalized)
+        removed = self.context.replace_session_context(mem_context, label="memories")
+        return {"active_scopes": normalized, "session_context_replaced": removed}
 
     def rewind_last_turn(self) -> int:
         """Remove the most recent user turn and all messages after it."""

@@ -63,11 +63,13 @@ python -m ming --help
 | `/status` | 查看 token 估算、记忆数量、行为模式数量 |
 | `/debug` | 切换 debug 日志 |
 | `/compact` | 手动触发旧对话压缩 |
+| `/resume` | 从最近 checkpoint 恢复上下文 |
 | `/rewind` | 移除最近一轮对话上下文 |
 | `/rollback` | 回滚最近一次 `file_write` / `file_edit` 造成的文件变更 |
 | `/forget session` | 从当前进程上下文移除 session 层 |
 | `/forget memory` | 删除持久用户记忆 |
 | `/forget project` | 删除持久 project 类型记忆 |
+| `/scope user,project,global` | 切换当前注入上下文的记忆作用域 |
 | `/trace` | 查看最近一轮 trace 文件路径 |
 | `/checkpoint` | 查看最近 checkpoint 文件路径 |
 | `/details` | 切换 agent-loop 进度详情展示 |
@@ -127,15 +129,19 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 
 这些事件会保存到 `.ming/traces/<turn_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
 
-### TODO / Notepad / Checkpoint
+### Context 工作台
 
-每轮请求会自动生成一份轻量运行工作台：
+Context 由 `ContextAssembler` 显式组装，顺序是 base → session → instant → TODO → Notepad → pinned evidence → toolset → dialog。每轮请求会自动生成一份轻量运行工作台：
 
+- instant context：记录当前用户请求、风险/工具相关的本轮指令。
+- TODO：把多步请求拆成 checklist，并在工具执行后推进状态。
 - `.ming/scratch/<turn_id>/notes.md`：记录用户请求和工具调用观察。
 - `.ming/traces/<turn_id>.json`：记录工具事件、进展类型和最终输出。
 - `.ming/checkpoints/<turn_id>/checkpoint.json`：保存当前消息、TODO、trace 路径和 notepad 路径。
+- pinned evidence：压缩时强制保留关键证据，并校验摘要是否保留。
+- scope context：`/scope user,project,global` 控制 user/project/global 记忆是否注入 session layer。
 
-当前 checkpoint 主要用于复盘和为后续断点续跑打基础；完整 resume 命令还在后续阶段。
+`/resume` 可以从最近 checkpoint 恢复上下文，继续在当前 CLI 进程里使用。
 
 ### Error Recovery
 
@@ -167,9 +173,9 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 - Automaticity：按行为模式维护熟练度，存储在 `.ming/automaticity.json`。
 - Experience Pool：每轮记录 tier signal，存储在 `.ming/experience.jsonl`；相似任务如果历史上出现过分歧，会触发 Gate 的历史分歧规则。
 
-### Context
+### Context 压缩
 
-Context 按基座层、会话层、对话层组织。超过阈值时会先裁剪旧工具输出，再用 LLM 压缩旧对话。
+超过阈值时会先裁剪旧工具输出，再用 LLM 压缩旧对话。压缩提示会带上 pinned evidence；压缩后会检查摘要是否保留关键证据，缺失时把证据补回摘要。
 
 ### LLM fallback
 
@@ -197,6 +203,11 @@ Context 按基座层、会话层、对话层组织。超过阈值时会先裁剪
 - PermissionGate 阻断高风险 shell 命令。
 - 动态工具选择。
 - 每轮 trace/checkpoint/notepad/TODO 落盘。
+- ContextAssembler 显式组装 context。
+- instant layer / TODO / Notepad / toolset 注入。
+- pinned evidence 和压缩后校验。
+- `/scope user,project,global` 作用域切换。
+- `/resume` 从最近 checkpoint 恢复上下文。
 - 默认日志不进入 debug 模式。
 - 默认压制 LiteLLM/provider 控制台噪音，改用 agent-loop 缩略进度。
 - `/details` 展开进度详情。
@@ -209,7 +220,7 @@ Context 按基座层、会话层、对话层组织。超过阈值时会先裁剪
 
 ## 后续路线
 
-完整路线见 [PLAN.md](PLAN.md)。后续重点包括：Error Recovery、Memory、Context 工作台深化、Observe/Trace 可视化、Checkpoint/Resume、低摩擦交互，以及谨慎接入 MCP/Skills。
+完整路线见 [PLAN.md](PLAN.md)。后续重点包括：Error Recovery、Memory、Observe/Trace 可视化、Web Research evidence pack、低摩擦交互，以及谨慎接入 MCP/Skills。
 
 ## 项目结构
 
@@ -232,6 +243,7 @@ src/ming/
 │   ├── tool_selection.py
 │   └── trace.py
 ├── context/
+│   ├── assembler.py
 │   └── manager.py
 ├── memory/
 │   ├── experience.py

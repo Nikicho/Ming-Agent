@@ -14,6 +14,8 @@ def test_main_prints_help_without_entering_interactive(capsys):
     assert "Usage:" in output
     assert "/compact" in output
     assert "/rewind" in output
+    assert "/resume" in output
+    assert "/scope" in output
 
 
 def test_setup_logging_defaults_file_log_to_info(tmp_path, monkeypatch):

@@ -145,13 +145,15 @@ python -m ming "只回复 fallback ok"
 ```text
 /trace
 /checkpoint
+/resume
 ```
 
 观察点：
 
 - `.ming/traces/<turn_id>.json` 是否包含 `tool_events` 和 `final_output`。
 - `.ming/checkpoints/<turn_id>/checkpoint.json` 是否包含 `messages`、`todo`、`trace_path` 和 `notepad_path`。
-- `.ming/scratch/<turn_id>/notes.md` 是否记录了用户请求和工具进展。
+- `.ming/scratch/<turn_id>/notes.md` 是否包含 `Assumptions`、`Evidence`、`Blockers`、`Tool Observations`。
+- `/resume` 是否恢复最近 checkpoint 的上下文。
 
 ## 6.9 默认日志噪音测试
 
@@ -227,6 +229,29 @@ python -m ming "只回复 fallback ok"
 - `/forget memory` 删除 user 类型持久记忆。
 - `/forget session` 只清当前进程 session 层，不删磁盘文件。
 
+## 6.12 Context Scope 测试
+
+先分别写入 user / project 记忆：
+
+```text
+记住我个人偏好用 pytest
+```
+
+然后手动准备一条 project memory，或让 Ming 记录项目事实。之后在交互模式输入：
+
+```text
+/scope project
+你现在知道我的个人测试偏好吗？
+/scope user,project
+你现在知道我的个人测试偏好吗？
+```
+
+观察点：
+
+- `/scope project` 后，user 类型记忆不应注入当前 session context。
+- `/scope user,project` 后，user 和 project 记忆都应重新注入。
+- `/status` 的 memory count 不代表当前注入 scope，只代表磁盘记忆数量。
+
 ## 7. Compaction 测试
 
 交互模式里连续让它读取 README、PLAN、多个源码文件，然后运行：
@@ -242,6 +267,7 @@ python -m ming "只回复 fallback ok"
 - message/token 估算是否变化。
 - 旧工具输出是否被裁剪。
 - 近期上下文是否仍保留。
+- pinned evidence 是否在 compact 摘要后仍保留。
 
 ## 8. Rewind 测试
 
