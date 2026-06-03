@@ -51,46 +51,54 @@ BETA_INJECTION = """\
 ## 整体评估"""
 
 GAMMA_COMPARE_PROMPT = """\
-两个独立分析者对同一个问题给出了不同的分析。请逐字段比较，判定一致性等级。
+你是一个内部质量控制模块。以下是对同一问题的两份独立分析（视角A和视角B），请比较并合成。
 
-分析者A的输出：
+视角A：
 {alpha_output}
 
-分析者B的输出：
+视角B：
 {beta_output}
 
-你的任务：
-1. 判定一致性等级：CONSISTENT（一致/细节差异）、COEXIST（方向不同可共存）、OPPOSED（根本对立）
-2. 如果 CONSISTENT：给出合并后的结论
-3. 如果 COEXIST：列出双方差异，翻译为用户可选的选项
-4. 如果 OPPOSED：列出对立的核心分歧点
+## 你的任务
+
+1. 判定一致性：CONSISTENT（一致/细节差异）、COEXIST（方向不同可共存）、OPPOSED（根本对立）
+
+2. 按一致性等级，撰写**给用户的最终回答**：
+   - CONSISTENT：直接输出合并后的结论，语气自然，就像一个人回答问题一样。不要提及"两个视角""多角度分析"等内部细节。
+   - COEXIST：说"这个问题有几种不同思路"，列出选项供用户选择。不要说"经过多角度分析"。
+   - OPPOSED：说"这个问题有一个关键分歧需要你来判断"，列出分歧的两面。
+
+重要：用户不知道有多个分析视角存在。给用户的回答必须读起来像一个助手自然给出的回复，不能出现"分析者A""视角A/B""两位分析者""独立分析"等内部术语。
 
 输出格式：
 ## 一致性等级
 (CONSISTENT / COEXIST / OPPOSED)
-## 分析
-## 给用户的输出"""
+## 给用户的回答"""
 
 GAMMA_RESOLVE_PROMPT = """\
-两个分析者对同一个问题存在根本对立。诊断对立的根源。
+你是一个内部质量控制模块。对同一问题的两份独立分析存在根本对立，请诊断分歧根源并整理给用户。
 
-分析者A的输出：
+视角A：
 {alpha_output}
 
-分析者B的输出：
+视角B：
 {beta_output}
 
-跳出他们的框架：
-1. A 和 B 共同遗漏了什么维度？
-2. 问题本身的定义是否有偏？
-3. 是否存在第三种框架能解释双方分歧？
-4. 给决策者一句话建议
+你的任务：
+1. 这两个视角的核心分歧在哪？
+2. 它们各自的盲点是什么？
+3. 有没有第三种思路？
+
+然后撰写**给用户的回答**——用户不知道内部有多个分析，回答要像一个助手经过深入思考后的自然表达：
+- 说"这个问题我想了比较久，核心分歧在于..."
+- 列出需要用户判断的关键抉择点
+- 给出你的倾向性建议
+
+不能出现"分析者""视角A/B""两份分析"等内部术语。
 
 输出格式：
-## 共同盲点
-## 分歧根源诊断
-## 第三视角
-## 给决策者的建议"""
+## 分歧诊断（内部记录，不给用户看）
+## 给用户的回答"""
 
 
 class AdversarialResult:
@@ -151,7 +159,7 @@ async def run_adversarial(
 
     # Step 2: γ Phase 1 — compare (fresh context, only sees outputs)
     gamma_compare_messages = [
-        Message(role="system", content="你是收敛分析者，负责比较两个独立分析的一致性。"),
+        Message(role="system", content="你是内部质量控制模块。你的输出中'给用户的回答'部分会直接展示给用户，必须自然流畅，不能暴露内部多视角分析的存在。"),
         Message(
             role="user",
             content=GAMMA_COMPARE_PROMPT.format(
@@ -181,12 +189,9 @@ async def run_adversarial(
         final_output = _extract_user_output(gamma_output)
 
     elif consistency == "COEXIST":
-        # Different but compatible — present options
+        # Different but compatible — present options (no architecture exposure)
         tier_signal = "T4_insight"
-        final_output = (
-            "经过多角度分析，有以下不同视角供你选择：\n\n"
-            + _extract_user_output(gamma_output)
-        )
+        final_output = _extract_user_output(gamma_output)
 
     else:  # OPPOSED
         # Step 3b: γ Phase 2 — divergence resolution
@@ -205,10 +210,7 @@ async def run_adversarial(
         resolve_response = await call_llm(messages=gamma_resolve_messages, config=config)
 
         tier_signal = "T6_clarified"
-        final_output = (
-            "分析过程中出现了根本性分歧，以下是厘清后的分歧点，需要你来裁决：\n\n"
-            + resolve_response.content
-        )
+        final_output = _extract_user_output(resolve_response.content)
 
     return AdversarialResult(
         final_output=final_output,
@@ -221,8 +223,20 @@ async def run_adversarial(
 
 
 def _extract_user_output(gamma_output: str) -> str:
-    """Extract the user-facing portion from γ's output."""
-    marker = "## 给用户的输出"
-    if marker in gamma_output:
-        return gamma_output.split(marker, 1)[1].strip()
+    """Extract the user-facing portion from γ's output.
+
+    Strips internal analysis sections, returns only what the user should see.
+    """
+    for marker in ["## 给用户的回答", "## 给用户的输出"]:
+        if marker in gamma_output:
+            return gamma_output.split(marker, 1)[1].strip()
+    # If no marker found, strip any internal sections
+    for internal_marker in ["## 一致性等级", "## 分歧诊断"]:
+        if internal_marker in gamma_output:
+            parts = gamma_output.split(internal_marker)
+            # Return everything after the last internal section
+            remaining = parts[-1]
+            for m in ["## 给用户的回答", "## 给用户的输出"]:
+                if m in remaining:
+                    return remaining.split(m, 1)[1].strip()
     return gamma_output
