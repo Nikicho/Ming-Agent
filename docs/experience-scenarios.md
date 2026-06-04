@@ -99,17 +99,18 @@ python -m ming "只回复 fallback ok"
 - 主模型失败后是否尝试备用模型。
 - 日志里是否能看到失败和后续成功。
 
-## 6.5 Web Search / Fetch 测试
+## 6.5 Web Research / Search / Fetch 测试
 
 ```text
-请用 web_search 搜索 Model Context Protocol tools，然后 fetch 官方规范页面，给我 3 条和 Ming 工具系统相关的启发
+请用 web_research 搜索 Model Context Protocol tools，优先官方来源，给我 3 条和 Ming 工具系统相关的启发
 ```
 
 观察点：
 
-- 是否调用 `web_search` 而不是 `bash curl`。
+- 是否调用 `web_research` 或 `web_search`，而不是 `bash curl`。
 - 是否只 fetch 少量高质量结果。
-- 回答是否带 URL 来源。
+- evidence pack 是否包含 `citations`、`evidence` 和 `source_url`。
+- `.ming/scratch/` 是否缓存 `web_research_*.json`。
 
 ## 6.6 策略循环停止测试
 
@@ -154,6 +155,7 @@ python -m ming "只回复 fallback ok"
 - `.ming/checkpoints/<turn_id>/checkpoint.json` 是否包含 `messages`、`todo`、`trace_path` 和 `notepad_path`。
 - `.ming/scratch/<turn_id>/notes.md` 是否包含 `Assumptions`、`Evidence`、`Blockers`、`Tool Observations`。
 - `/resume` 是否恢复最近 checkpoint 的上下文。
+- `/expand evt-1` 是否能展开最近 trace 的第一条事件。
 
 ## 6.9 默认日志噪音测试
 
@@ -205,6 +207,17 @@ python -m ming "只回复 fallback ok"
 - 文件内容应恢复为 `old`。
 - 该能力只覆盖 `file_write` / `file_edit`，不覆盖 shell 命令副作用。
 
+## 6.10.5 T3 Fail 重入测试
+
+```text
+创建 scratch/t3_demo.txt，内容必须是 right。完成后你自己核验：如果工具结果和最终答复不一致，重新修正。
+```
+
+观察点：
+
+- 如果 T3 发现最终答复与工具证据不一致，Ming 应把失败原因回喂主 loop。
+- 后续应该重新调用工具或修正最终答复，而不是直接把错误答案给用户。
+
 ## 6.11 Scope Forget 测试
 
 先保存一条记忆：
@@ -228,6 +241,15 @@ python -m ming "只回复 fallback ok"
 - `/clear` 只清当前对话，不删除持久记忆。
 - `/forget memory` 删除 user 类型持久记忆。
 - `/forget session` 只清当前进程 session 层，不删磁盘文件。
+
+## 6.11.5 Memory Stale 测试
+
+先制造一条 project memory，然后在 Python 里调用 `MemoryStore.mark_stale(path, reason)` 或通过后续工具触发 stale 标记。
+
+观察点：
+
+- memory frontmatter 是否出现 `stale: true` 和 `stale_reason`。
+- stale 只是标记，不会直接删除记忆。
 
 ## 6.12 Context Scope 测试
 
@@ -268,6 +290,19 @@ python -m ming "只回复 fallback ok"
 - 旧工具输出是否被裁剪。
 - 近期上下文是否仍保留。
 - pinned evidence 是否在 compact 摘要后仍保留。
+
+## 7.5 Cleanup 测试
+
+连续跑几轮任务生成 checkpoint 后输入：
+
+```text
+/cleanup
+```
+
+观察点：
+
+- 旧 checkpoint 是否按保留策略清理。
+- 当前最新 checkpoint 不应被清理。
 
 ## 8. Rewind 测试
 

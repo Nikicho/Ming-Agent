@@ -5,9 +5,12 @@ Provides retrieval for context assembly.
 """
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import yaml
+
+from ming.core.llm import Message
 
 logger = logging.getLogger("ming")
 
@@ -96,6 +99,44 @@ class MemoryStore:
         self._load_all()
         logger.info(f"Memory saved: {name} ({mem_type})")
         return path
+
+    def extract_session_summary(self, messages: list[Message]) -> list[Path]:
+        """Extract simple user/project memories from a session transcript."""
+        saved: list[Path] = []
+        combined = "\n".join(message.content for message in messages if message.content)
+        if "记住" in combined or "偏好" in combined:
+            saved.append(
+                self.save(
+                    name=f"user_summary_{datetime.now():%Y%m%d_%H%M%S}",
+                    description="session user preference",
+                    mem_type="user",
+                    content=combined[:1000],
+                )
+            )
+        if any(token in combined for token in ["项目结构", "src/", "src\\", "常用命令"]):
+            saved.append(
+                self.save(
+                    name=f"project_summary_{datetime.now():%Y%m%d_%H%M%S}",
+                    description="session project facts",
+                    mem_type="project",
+                    content=combined[:1000],
+                )
+            )
+        return saved
+
+    def mark_stale(self, path: str | Path, reason: str) -> None:
+        """Mark a memory file as stale for later reconsolidation."""
+        memory_path = Path(path)
+        text = memory_path.read_text(encoding="utf-8", errors="replace")
+        if not text.startswith("---"):
+            return
+        parts = text.split("---", 2)
+        meta = yaml.safe_load(parts[1]) or {}
+        meta["stale"] = True
+        meta["stale_reason"] = reason
+        frontmatter = yaml.dump(meta, allow_unicode=True, default_flow_style=False)
+        memory_path.write_text(f"---\n{frontmatter}---{parts[2]}", encoding="utf-8")
+        self._load_all()
 
     def search(self, query: str, max_results: int = 5) -> list[MemoryEntry]:
         """Simple keyword search across memories."""

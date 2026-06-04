@@ -14,6 +14,31 @@ class FileSnapshot:
     content: str = ""
 
 
+@dataclass
+class ErrorAssessment:
+    category: str
+    retryable: bool
+    recoverable: bool
+    summary: str
+
+
+class ErrorClassifier:
+    """Classify tool/provider errors for retry and handoff decisions."""
+
+    def classify(self, text: str) -> ErrorAssessment:
+        lowered = text.lower()
+        if "[permission denied]" in lowered or "不可逆" in lowered:
+            return ErrorAssessment("permission", retryable=False, recoverable=False, summary=text)
+        if any(token in lowered for token in ["timeout", "timed out", "rate limit", "429"]):
+            return ErrorAssessment("transient", retryable=True, recoverable=True, summary=text)
+        tool_input_tokens = ["old_string not found", "invalid json", "file not found"]
+        if any(token in lowered for token in tool_input_tokens):
+            return ErrorAssessment("tool_input", retryable=False, recoverable=True, summary=text)
+        if any(token in lowered for token in ["model", "provider", "api"]):
+            return ErrorAssessment("provider", retryable=True, recoverable=True, summary=text)
+        return ErrorAssessment("unknown", retryable=False, recoverable=True, summary=text)
+
+
 class FileSnapshotStore:
     """Persist pre-change file states so the latest file tool change can roll back."""
 

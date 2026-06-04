@@ -37,7 +37,7 @@ from ming.memory.store import MemoryStore
 from ming.tools.base import ToolRegistry, ToolResult
 from ming.tools.bash import BashTool
 from ming.tools.file import FileEditTool, FileReadTool, FileWriteTool
-from ming.tools.web import WebFetchTool, WebSearchTool
+from ming.tools.web import WebFetchTool, WebResearchTool, WebSearchTool
 
 logger = logging.getLogger("ming")
 
@@ -77,6 +77,7 @@ def _build_tool_registry(working_dir: str | None = None) -> ToolRegistry:
     registry.register(FileEditTool(working_dir))
     registry.register(WebSearchTool())
     registry.register(WebFetchTool())
+    registry.register(WebResearchTool())
     return registry
 
 
@@ -202,6 +203,7 @@ class Agent:
         iteration = 0
         turn_start = time.time()
         used_tools = False
+        t3_repair_attempted = False
         self.loop_detector.reset()
         self.progress_tracker.reset()
         selected_tool_names = self.tool_selector.select_tool_names(user_input, self.tools.names())
@@ -293,6 +295,7 @@ class Agent:
                     )
                     assessment = self.progress_tracker.record(event)
                     trace.add_tool_event(event)
+                    trace.add_assessment(assessment.decision, assessment.reason)
                     self.notepad.add_tool_observation(
                         notepad_path,
                         f"tool={tool_name} status={event.status} progress={event.progress}",
@@ -302,10 +305,12 @@ class Agent:
                             notepad_path,
                             f"{tool_name}: {result.output[:300]}",
                         )
+                        trace.add_observation("tool_error", f"{tool_name}: {result.output[:200]}")
                     elif event.evidence_count > 0:
                         evidence = f"{tool_name}: {result.output[:500]}"
                         self.notepad.add_evidence(notepad_path, tool_name, result.output[:500])
                         self.context.pin_evidence(evidence)
+                        trace.add_observation("evidence", evidence)
                     todo.mark_step_completed(tool_name)
                     self.context.set_turn_workbench(
                         todo=todo.to_context(),
@@ -339,6 +344,18 @@ class Agent:
             else:
                 self._emit_progress("verify", "执行 T3 核验")
                 tier_signal = await self._run_t3_fact_check(user_input, final_content)
+                if tier_signal == "T3_error" and not t3_repair_attempted:
+                    t3_repair_attempted = True
+                    self.context.add_message(
+                        Message(
+                            role="user",
+                            content=(
+                                "T3 核验失败：最终答复与工具证据不一致。"
+                                "请基于工具结果修正方案，必要时重新调用工具。"
+                            ),
+                        )
+                    )
+                    continue
 
             self.context.add_message(Message(role="assistant", content=final_content))
             self._maybe_encode_explicit_memory(user_input)
@@ -372,9 +389,9 @@ class Agent:
         """Roll back the most recent file_write/file_edit snapshot."""
         return self.snapshots.rollback_latest()
 
-    def resume_latest_checkpoint(self) -> dict | None:
-        """Restore dialog context from the latest checkpoint."""
-        path = self.checkpoints.latest()
+    def resume_latest_checkpoint(self, checkpoint_id: str = "latest") -> dict | None:
+        """Restore dialog context from a checkpoint."""
+        path = self.checkpoints.resolve(checkpoint_id)
         if path is None:
             return None
         payload = self.checkpoints.load(path)
@@ -389,6 +406,14 @@ class Agent:
         trace_path = payload.get("trace_path")
         self.last_trace_path = Path(trace_path) if trace_path else None
         return payload
+
+    def expand_trace_event(self, event_id: str) -> dict | None:
+        if self.last_trace_path is None:
+            return None
+        return RunTrace.expand_event(self.last_trace_path, event_id)
+
+    def cleanup_runtime(self, keep_checkpoints: int = 20) -> dict[str, int]:
+        return {"checkpoints_removed": self.checkpoints.cleanup(keep=keep_checkpoints)}
 
     def _finish_turn(
         self,

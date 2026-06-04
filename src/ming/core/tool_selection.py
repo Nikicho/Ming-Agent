@@ -7,7 +7,7 @@ class ToolSelector:
         available = set(available_tool_names)
 
         if any(term in lowered for term in ["搜索", "搜一下", "网页", "web", "http", "https"]):
-            preferred = ["web_search", "web_fetch", "file_read"]
+            preferred = ["web_research", "web_search", "web_fetch", "file_read"]
             return [name for name in preferred if name in available]
 
         if any(term in lowered for term in ["记住", "remember"]):

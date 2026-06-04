@@ -79,32 +79,40 @@
 
 目标：让 Ming 在工具失败、模型失败、循环退化、文件误改时能恢复或停在可理解状态。
 
-待建设：
+已落地：
 
-- L1 工具错误：错误分类、短重试、错误摘要、可恢复/不可恢复标记。
-- L2 推理错误：T1/T3 失败后的重入策略，而不是只记录 tier signal。
-- L3 对抗系统错误：β/γ 超时降级、部分结果可用、用户可见的降级说明。
-- L4 Provider 错误：fallback、限流、超时、模型不可用、turn-scoped 恢复。
+- L1 工具错误：`ErrorClassifier` 分类 transient/provider/tool_input/permission，标记 retryable/recoverable。
+- L2 推理错误：T3 fail 后把失败原因回喂进主 loop，允许重新调用工具修正。
+- L4 Provider 错误：LiteLLM fallback 已 turn-scoped 恢复，provider 噪音默认压制。
 - L5 循环/退化：fingerprint + progress + budget + human handoff。
-- 文件回滚：file write/edit 前快照，按 turn 保存 checkpoint。
-- Git 回滚：可选每轮 checkpoint commit，提供 `/rollback`。
+- 文件回滚：file write/edit 前快照，按 turn 保存 checkpoint，`/rollback` 回滚最近文件工具变更。
 - 权限门禁：delete、force push、reset hard、写远程、账号操作 hard stop。
+
+剩余增强：
+
+- Git 回滚：可选每轮 checkpoint commit。
+- L3 对抗系统错误：β/γ 超时降级、部分结果可用、用户可见的降级说明。
+- 交互式审批：一键批准/拒绝高风险操作。
 
 ### 2. Memory 主线
 
 目标：把“记住一句话”升级为可审计、可遗忘、可再验证的多类型记忆系统。
 
-待建设：
+已落地：
 
 - 显式记忆：用户说“记住……”进入 user memory。
-- 会话摘要：每轮或会话结束自动提取目标、决策、偏好、文件事实。
-- 项目记忆：项目结构、约定、近期改动、常用命令。
+- 会话摘要：可从消息中提取 user/project 类型记忆。
+- 项目记忆：支持 project 类型记忆、scope 注入和删除。
 - Experience Pool：失败、分歧、策略效果和工具有效性。
 - Automaticity：行为模式熟练度，不是单次任务分数。
 - NotePad：每轮运行中的 scratch notes，记录关键假设、发现、未解决问题。
-- Dreaming：Light/Deep/REM 巩固、降噪、合并、遗忘。
-- Stale memory reconsolidation：检索时重新验证，过期则降权、更新或删除。
+- Stale memory reconsolidation：支持 stale/stale_reason 标记。
 - 清空 Memory：提供按 scope 清空，而不是一键删所有。
+
+剩余增强：
+
+- Dreaming：Light/Deep/REM 巩固、降噪、合并、遗忘。
+- stale memory 检索时自动重新验证、降权、更新或删除。
 
 建议 scope：
 
@@ -143,54 +151,67 @@
 
 - `web_search`。
 - `web_fetch`。
-- 连续无增益停止。
-
-待建设：
-
 - `web_research`：search + source selection + fetch + evidence pack。
-- 引用追踪：最终回答能追到 URL。
+- 引用追踪：evidence pack 返回 citations 和 source_url。
 - domain allow/deny。
 - freshness filter。
+- `.ming/scratch/` evidence pack 缓存。
+- 连续无增益停止。
+
+剩余增强：
+
 - PDF/HTML 正文抽取增强。
-- `.ming/scratch/<turn_id>/` 缓存和自动清理。
+- 更强 source ranking 和引用格式约束。
 
 ### 5. Observe / Trace / Feedback 主线
 
 目标：让每轮执行可观察、可复盘、可反馈到记忆与 Automaticity。
 
-待建设：
+已落地：
 
-- `RunTrace`：记录 turn_id、plan、tool events、observations、assessments。
-- `Observe` 链路：每次工具结果进入观察层，先摘要再进入 LLM。
-- `Feedback` 闭环：T1/T3/T4/T6/T7、人类反馈、工具错误都写入 Experience。
-- UI tool cards：默认展示摘要，debug 才展开 raw output。
+- `RunTrace`：记录 turn_id、tool events、observations、assessments。
+- `Observe` 链路：工具结果提取 evidence/blocker/observation 进入 notepad 和 trace。
+- UI tool cards：默认展示摘要，`/details` 和 `/expand <event_id>` 展开 raw detail。
 - `/trace`：查看当前轮/上一轮 trace。
 - `/expand <event_id>`：展开某个工具调用细节。
 - 结构化 event log：默认 INFO，DEBUG 显式开启。
+
+剩余增强：
+
+- Feedback 闭环：人类显式反馈、T4/T6/T7 更细地写入 Experience。
+- Trace 可视化 UI。
 
 ### 6. Persist Checkpoint / 断点续跑主线
 
 目标：长任务中断后能恢复，不依赖完整对话窗口。
 
-待建设：
+已落地：
 
 - 每轮 checkpoint：messages summary、TODO、notepad、tool events、changed files。
 - 文件快照：编辑前保存 patch 或副本。
-- 断点续跑：`ming resume <checkpoint_id>`。
-- 崩溃恢复：启动时提示是否恢复未完成 run。
+- 断点续跑：`/resume` 和 `/resume <checkpoint_id>`。
 - checkpoint 清理策略：按时间、项目、成功状态清理。
+
+剩余增强：
+
+- 崩溃恢复：启动时提示是否恢复未完成 run。
+- checkpoint cleanup 继续增强为按项目/成功状态清理。
 
 ### 7. 低摩擦交互主线
 
 目标：减少人类管理 Agent 的成本，让用户只在高价值节点介入。
 
-待建设：
+已落地：
 
 - 默认展示高信号进度，不刷屏。
+- `/cleanup` 清理旧 checkpoint。
+- 自动命名 checkpoint。
+
+剩余增强：
+
 - 后台自动整理 logs/scratch/checkpoints。
 - 轻量主动提示：只在价值大于打断成本时出现。
 - 一键批准/拒绝/展开/暂停/继续。
-- 自动命名会话和 checkpoint。
 - 常用工作流自动化：测试、审查、清理、总结。
 - 多入口适配：CLI、桌面、语音/低摩擦通道预留。
 
@@ -201,9 +222,9 @@
 原则：
 
 - MCP Adapter 延后到明确需要外部工具时再接。
-- 先做 Skill Index，只加载 name/description/trust_level/allowed_tools。
+- 已落地 Skill Index，只加载 name/description/trust_level/allowed_tools。
 - Skill body 只在认知路由和权限门禁都允许时加载。
-- Agent 可提出 Tool Need Proposal，但新工具注册必须经过测试和人类批准。
+- 已落地 Tool Need Proposal，新工具注册必须经过测试和人类批准。
 - 第三方 skill 默认低信任，不得改写 P/D/E 核心原则。
 
 ## 近期优先级建议

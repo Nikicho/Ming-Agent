@@ -4,9 +4,11 @@ import html
 import json
 import os
 import re
+from datetime import date, datetime
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -185,6 +187,133 @@ class WebFetchTool(Tool):
         return ToolResult(output=json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+class WebResearchTool(Tool):
+    def __init__(
+        self,
+        search_tool: WebSearchTool | None = None,
+        fetch_tool: WebFetchTool | None = None,
+        cache_root: str | Path | None = None,
+    ):
+        self.search_tool = search_tool or WebSearchTool()
+        self.fetch_tool = fetch_tool or WebFetchTool()
+        self.cache_root = Path(cache_root) if cache_root else Path.cwd() / ".ming" / "scratch"
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def name(self) -> str:
+        return "web_research"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Search, select sources, fetch pages, and return an evidence pack with citations. "
+            "Use for web research that needs sources."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer", "description": "Search result limit."},
+                "max_sources": {"type": "integer", "description": "Fetch source limit."},
+                "allow_domains": {"type": "array", "items": {"type": "string"}},
+                "deny_domains": {"type": "array", "items": {"type": "string"}},
+                "freshness_days": {"type": "integer"},
+            },
+            "required": ["query"],
+        }
+
+    async def execute(
+        self,
+        query: str,
+        max_results: int = 5,
+        max_sources: int = 3,
+        allow_domains: list[str] | None = None,
+        deny_domains: list[str] | None = None,
+        freshness_days: int | None = None,
+        today: str | None = None,
+        **_: Any,
+    ) -> ToolResult:
+        search_payload = await self._search(query, max_results=max_results)
+        results = self._filter_results(
+            search_payload.get("results", []),
+            allow_domains=allow_domains or [],
+            deny_domains=deny_domains or [],
+            freshness_days=freshness_days,
+            today=today,
+        )[: max(1, min(max_sources, 5))]
+
+        citations = []
+        evidence = []
+        for index, result in enumerate(results, start=1):
+            fetched = await self._fetch(result["url"], max_chars=12000)
+            text = str(fetched.get("text", "")).strip()
+            citations.append(
+                {
+                    "id": f"S{index}",
+                    "title": fetched.get("title") or result.get("title", ""),
+                    "url": fetched.get("url") or result.get("url", ""),
+                    "snippet": result.get("snippet", ""),
+                }
+            )
+            evidence.append(
+                {
+                    "citation_id": f"S{index}",
+                    "quote": text[:500],
+                    "source_url": fetched.get("url") or result.get("url", ""),
+                }
+            )
+
+        payload = {
+            "query": query,
+            "citations": citations,
+            "evidence": evidence,
+            "source_count": len(citations),
+        }
+        cache_path = self.cache_root / f"web_research_{datetime.now():%Y%m%d_%H%M%S_%f}.json"
+        cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        payload["cache_path"] = str(cache_path)
+        return ToolResult(output=json.dumps(payload, ensure_ascii=False, indent=2))
+
+    async def _search(self, query: str, max_results: int = 5, provider: str = "auto", **kwargs):
+        result = await self.search_tool.execute(
+            query=query,
+            max_results=max_results,
+            provider=provider,
+        )
+        return json.loads(result.output)
+
+    async def _fetch(self, url: str, max_chars: int = 12000, **kwargs):
+        result = await self.fetch_tool.execute(url=url, max_chars=max_chars)
+        return json.loads(result.output)
+
+    def _filter_results(
+        self,
+        results: list[dict[str, Any]],
+        allow_domains: list[str],
+        deny_domains: list[str],
+        freshness_days: int | None,
+        today: str | None,
+    ) -> list[dict[str, Any]]:
+        allowed = [domain.lower() for domain in allow_domains]
+        denied = [domain.lower() for domain in deny_domains]
+        filtered = []
+        for result in results:
+            host = urlparse(result.get("url", "")).netloc.lower()
+            if allowed and not any(host.endswith(domain) for domain in allowed):
+                continue
+            if denied and any(host.endswith(domain) for domain in denied):
+                continue
+            if freshness_days is not None and not _is_fresh(
+                result.get("published"), freshness_days, today
+            ):
+                continue
+            filtered.append(result)
+        return filtered
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -260,3 +389,14 @@ def _parse_duckduckgo_lite(source: str, max_results: int) -> list[dict[str, Any]
 
 def _clean_html(value: str) -> str:
     return html.unescape(re.sub(r"<.*?>", "", value, flags=re.DOTALL)).strip()
+
+
+def _is_fresh(published: str | None, freshness_days: int, today: str | None) -> bool:
+    if not published:
+        return True
+    try:
+        published_date = date.fromisoformat(str(published)[:10])
+        today_date = date.fromisoformat(today[:10]) if today else date.today()
+    except ValueError:
+        return True
+    return (today_date - published_date).days <= freshness_days

@@ -64,12 +64,15 @@ python -m ming --help
 | `/debug` | 切换 debug 日志 |
 | `/compact` | 手动触发旧对话压缩 |
 | `/resume` | 从最近 checkpoint 恢复上下文 |
+| `/resume <checkpoint_id>` | 从指定 checkpoint 恢复上下文 |
 | `/rewind` | 移除最近一轮对话上下文 |
 | `/rollback` | 回滚最近一次 `file_write` / `file_edit` 造成的文件变更 |
 | `/forget session` | 从当前进程上下文移除 session 层 |
 | `/forget memory` | 删除持久用户记忆 |
 | `/forget project` | 删除持久 project 类型记忆 |
 | `/scope user,project,global` | 切换当前注入上下文的记忆作用域 |
+| `/expand <event_id>` | 展开最近 trace 中某个事件 |
+| `/cleanup` | 清理旧 checkpoint |
 | `/trace` | 查看最近一轮 trace 文件路径 |
 | `/checkpoint` | 查看最近 checkpoint 文件路径 |
 | `/details` | 切换 agent-loop 进度详情展示 |
@@ -86,6 +89,7 @@ python -m ming --help
 - `file_edit`：用唯一精确字符串替换编辑文件。
 - `web_search`：搜索网页，返回结构化 `title/url/snippet/score`。
 - `web_fetch`：抓取 URL 并提取可读正文。
+- `web_research`：搜索、筛选来源、抓取网页并生成 evidence pack/citations。
 
 `web_search` 支持按环境变量选择 provider：
 
@@ -93,7 +97,7 @@ python -m ming --help
 - `EXA_API_KEY`：其次使用 Exa。
 - 无 API key：回退到 DuckDuckGo Lite HTML 解析。
 
-联网研究时优先使用 `web_search` + `web_fetch`，不要用 `bash` 硬爬搜索页。
+联网研究时优先使用 `web_research` 或 `web_search` + `web_fetch`，不要用 `bash` 硬爬搜索页。`web_research` 支持 domain allow/deny、freshness filter，并把 evidence pack 缓存到 `.ming/scratch/`。
 
 CLI 默认展示高信号进度，例如“准备上下文”“调用模型”“执行工具 file_write”“执行 T3 核验”。底层 LiteLLM、httpx、asyncio 等 provider 日志默认不刷屏；需要看详细内部日志时使用 `/debug`，需要展开每步参数时使用 `/details`，完整记录仍可通过 `/trace` 查看。
 
@@ -115,6 +119,7 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 
 - 非工具型回答会在输出前跑一次 T1 CoVe 自检。
 - 使用工具生成或修改工件后，会跑一次 T3 fresh-context 核验，检查工具结果是否支持最终答复。
+- 如果 T3 判定最终答复和工具证据不一致，Ming 会把失败原因回喂进主 loop，允许重新调用工具修正一次。
 
 ### ToolEvent + ProgressAssessment
 
@@ -128,6 +133,7 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 连续多次 `no_signal/artifact_noise` 会停止本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略循环。
 
 这些事件会保存到 `.ming/traces/<turn_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
+Trace 还会记录 observations 和 assessments；交互模式用 `/expand <event_id>` 可以展开最近 trace 的某个事件。
 
 ### Context 工作台
 
@@ -142,6 +148,7 @@ Context 由 `ContextAssembler` 显式组装，顺序是 base → session → ins
 - scope context：`/scope user,project,global` 控制 user/project/global 记忆是否注入 session layer。
 
 `/resume` 可以从最近 checkpoint 恢复上下文，继续在当前 CLI 进程里使用。
+checkpoint 同时保存 messages summary、changed files、name，并支持 `/resume <checkpoint_id>` 和 `/cleanup`。
 
 ### Error Recovery
 
@@ -152,6 +159,7 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 - snapshot 存储在 `.ming/snapshots/`。
 
 当前回滚只覆盖 Ming 文件工具造成的文本文件变更，不覆盖 `bash` 命令造成的外部副作用。
+错误恢复还包括 `ErrorClassifier`：区分 transient、provider、tool_input、permission 等错误，标记 retryable/recoverable，并用于后续恢复策略。
 
 ### 认知路由 + 对抗分析
 
@@ -170,8 +178,14 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 ### 记忆与经验
 
 - 显式记忆：用户说“记住……”时会写入 `.ming/memory/*.md`。
+- 会话摘要提取：可从会话消息中提取 user/project 类型记忆。
+- stale reconsolidation：记忆可标记 stale 与 stale_reason，供后续重新验证或降权。
 - Automaticity：按行为模式维护熟练度，存储在 `.ming/automaticity.json`。
 - Experience Pool：每轮记录 tier signal，存储在 `.ming/experience.jsonl`；相似任务如果历史上出现过分歧，会触发 Gate 的历史分歧规则。
+
+### Skill Index / Tool Need
+
+Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trust_level、allowed_tools，不把 skill body 常驻注入大脑。Agent 可以生成 `ToolNeedProposal`，但新工具注册仍需要测试和人类批准。
 
 ### Context 压缩
 
@@ -199,6 +213,7 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 - Windows shell 描述。
 - Experience Pool 历史分歧检索。
 - Web search / fetch 结构化输出。
+- Web research evidence pack、domain allow/deny、freshness filter。
 - ProgressAssessment 停止无增益工具循环。
 - PermissionGate 阻断高风险 shell 命令。
 - 动态工具选择。
@@ -208,6 +223,12 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 - pinned evidence 和压缩后校验。
 - `/scope user,project,global` 作用域切换。
 - `/resume` 从最近 checkpoint 恢复上下文。
+- `/resume <checkpoint_id>` 指定恢复。
+- `/expand <event_id>` 展开 trace event。
+- checkpoint cleanup。
+- ErrorClassifier 与 T3 fail 重入 loop。
+- session/project memory extract 与 stale 标记。
+- SkillIndex 与 ToolNeedProposal。
 - 默认日志不进入 debug 模式。
 - 默认压制 LiteLLM/provider 控制台噪音，改用 agent-loop 缩略进度。
 - `/details` 展开进度详情。
@@ -220,7 +241,7 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 
 ## 后续路线
 
-完整路线见 [PLAN.md](PLAN.md)。后续重点包括：Error Recovery、Memory、Observe/Trace 可视化、Web Research evidence pack、低摩擦交互，以及谨慎接入 MCP/Skills。
+完整路线见 [PLAN.md](PLAN.md)。后续重点包括：更完整的 Git 回滚、交互式审批、Dreaming 巩固、完整 MCP Adapter，以及更强的 PDF 抽取。
 
 ## 项目结构
 
@@ -248,6 +269,8 @@ src/ming/
 ├── memory/
 │   ├── experience.py
 │   └── store.py
+├── skills/
+│   └── index.py
 └── tools/
     ├── base.py
     ├── bash.py
