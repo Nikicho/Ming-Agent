@@ -300,6 +300,7 @@ def _help_text() -> str:
     return """Usage:
   python -m ming "your request"
   python -m ming
+  python -m ming ui [--host 127.0.0.1] [--port 8765]
 
 Interactive commands:
   /quit     Exit
@@ -320,11 +321,41 @@ Interactive commands:
 """
 
 
+def _run_trace_console(argv: Sequence[str]) -> None:
+    host = "127.0.0.1"
+    port = 8765
+    index = 0
+    while index < len(argv):
+        option = argv[index]
+        if option == "--host" and index + 1 < len(argv):
+            host = argv[index + 1]
+            index += 2
+            continue
+        if option == "--port" and index + 1 < len(argv):
+            try:
+                port = int(argv[index + 1])
+            except ValueError:
+                print(f"Invalid --port: {argv[index + 1]}")
+                raise SystemExit(2) from None
+            index += 2
+            continue
+        print(f"Unknown ui option: {option}")
+        raise SystemExit(2)
+
+    from ming.ui.trace_console import TraceConsoleApp
+
+    TraceConsoleApp().serve(host=host, port=port)
+
+
 def main(argv: Sequence[str] | None = None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in ("-h", "--help", "help"):
         print(_help_text())
         raise SystemExit(0)
+
+    if argv and argv[0] == "ui":
+        _run_trace_console(argv[1:])
+        return
 
     # Single-message mode
     if argv and not argv[0].startswith("-"):

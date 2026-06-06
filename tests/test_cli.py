@@ -18,6 +18,7 @@ def test_main_prints_help_without_entering_interactive(capsys):
     assert "/scope" in output
     assert "/expand" in output
     assert "/cleanup" in output
+    assert "python -m ming ui" in output
 
 
 def test_setup_logging_defaults_file_log_to_info(tmp_path, monkeypatch):

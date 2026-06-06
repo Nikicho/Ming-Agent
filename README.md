@@ -54,6 +54,14 @@ python -m ming
 python -m ming --help
 ```
 
+Trace Console 本地可视化界面：
+
+```powershell
+python -m ming ui --port 8765
+```
+
+打开 `http://127.0.0.1:8765` 后，可以查看最近一轮 agent-loop 的任务、TODO、工具步骤、进展判断、可公开思路摘要、subagent 状态和 trace/checkpoint/notepad 路径。当前 UI 读取本地 `.ming/` 运行产物，不需要 API key，也不会展示底层 LiteLLM/provider 噪音日志。
+
 交互命令：
 
 | 命令 | 作用 |
@@ -100,6 +108,16 @@ python -m ming --help
 联网研究时优先使用 `web_research` 或 `web_search` + `web_fetch`，不要用 `bash` 硬爬搜索页。`web_research` 支持 domain allow/deny、freshness filter，并把 evidence pack 缓存到 `.ming/scratch/`。
 
 CLI 默认展示高信号进度，例如“准备上下文”“调用模型”“执行工具 file_write”“执行 T3 核验”。底层 LiteLLM、httpx、asyncio 等 provider 日志默认不刷屏；需要看详细内部日志时使用 `/debug`，需要展开每步参数时使用 `/details`，完整记录仍可通过 `/trace` 查看。
+
+### Trace Console
+
+`python -m ming ui` 会启动一个只读本地 Web UI，默认监听 `127.0.0.1:8765`。它把 `.ming/traces/` 和 `.ming/checkpoints/` 里的最近一轮运行记录整理成三个视图：
+
+- 左侧：当前任务、TODO、trace/checkpoint/notepad/changed files。
+- 中间：Agent Loop 时间线，包括用户任务、工具事件、observation、assessment 和最终回复。
+- 右侧：agent 状态、可公开思路摘要、Alpha/Beta/Gamma subagent 槽位和点击步骤后的结构化详情。
+
+当前版本展示的是“最近一次已落盘回合”。如果要做到真正的运行中实时流式展示，后续需要把 progress callback 也持续写入 live trace。
 
 ### 动态工具选择
 
@@ -234,10 +252,19 @@ Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trus
 - `/details` 展开进度详情。
 - `/forget session|memory|project` scope-aware 清理。
 - `/rollback` 回滚最近一次文件工具变更。
+- Trace Console 状态聚合、HTML 渲染和空状态。
 
 ## 用力测试场景
 
 详见 [docs/experience-scenarios.md](docs/experience-scenarios.md)。建议先从“Windows 工具循环压力测试”和“对抗档架构审查”开始。
+
+体验 Trace Console 时可以按这个顺序压测：
+
+1. 启动 `python -m ming ui --port 8765`，打开 `http://127.0.0.1:8765`，确认空状态或最近一轮 trace 能正常展示。
+2. 在另一个终端运行 `python -m ming`，输入“创建 `scratch/trace_demo.txt`，内容写入你刚才的建议，然后读取确认”。回到页面确认 TODO、工具事件、最终回复和 changed files 都更新。
+3. 输入一个需要联网证据的问题，例如“搜索 Ming agent web_search 的设计参考，给出来源摘要”。确认页面能看到 `web_search` / `web_fetch` / `web_research` 相关工具事件和 evidence 数量。
+4. 输入一个容易重复的任务，例如“反复检查同一个不存在的文件直到找到答案”。确认 CLI 不刷 LiteLLM 噪音，页面里能看到 assessment 是否把无增益工具循环暴露出来。
+5. 输入一个架构审查任务，例如“审查当前 Trace Console 交互设计，列出 Alpha/Beta/Gamma 的分歧”。当前 UI 会保留 subagent 槽位；真正实时分支可视化仍属于后续增强。
 
 ## 后续路线
 
