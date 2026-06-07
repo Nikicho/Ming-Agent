@@ -123,6 +123,7 @@ def print_banner():
             "  /scope <user,project,global> Switch active memory scopes\n"
             "  /expand <event_id> Expand a trace event\n"
             "  /cleanup Cleanup old checkpoints\n"
+            "  /dream  Run a light Dream review report\n"
             "  /trace   Show the latest run trace file\n"
             "  /checkpoint Show the latest checkpoint file\n"
             "  /details Toggle detailed progress",
@@ -256,6 +257,12 @@ async def interactive_loop():
                     result = agent.cleanup_runtime()
                     console.print(f"[dim]Cleanup: {result}[/dim]\n")
                     continue
+                elif cmd == "/dream":
+                    from ming.core.dream import DreamEngine
+
+                    path = DreamEngine(agent.workspace_root).run()
+                    console.print(f"[dim]Dream report: {path}[/dim]\n")
+                    continue
                 elif cmd == "/trace":
                     path = agent.last_trace_path
                     console.print(f"[dim]Latest trace: {path or 'none'}[/dim]\n")
@@ -301,6 +308,7 @@ def _help_text() -> str:
   python -m ming "your request"
   python -m ming
   python -m ming ui [--host 127.0.0.1] [--port 8765]
+  python -m ming dream [--mode light] [--limit 10]
 
 Interactive commands:
   /quit     Exit
@@ -315,6 +323,7 @@ Interactive commands:
   /scope    Switch active memory scopes: /scope user,project,global
   /expand   Expand a trace event by id
   /cleanup  Cleanup old checkpoints
+  /dream    Run a non-mutating Dream review report
   /trace    Show the latest run trace file
   /checkpoint Show the latest checkpoint file
   /details  Toggle detailed progress
@@ -347,6 +356,33 @@ def _run_trace_console(argv: Sequence[str]) -> None:
     TraceConsoleApp().serve(host=host, port=port)
 
 
+def _run_dream(argv: Sequence[str]) -> None:
+    mode = "light"
+    limit = 10
+    index = 0
+    while index < len(argv):
+        option = argv[index]
+        if option == "--mode" and index + 1 < len(argv):
+            mode = argv[index + 1]
+            index += 2
+            continue
+        if option == "--limit" and index + 1 < len(argv):
+            try:
+                limit = int(argv[index + 1])
+            except ValueError:
+                print(f"Invalid --limit: {argv[index + 1]}")
+                raise SystemExit(2) from None
+            index += 2
+            continue
+        print(f"Unknown dream option: {option}")
+        raise SystemExit(2)
+
+    from ming.core.dream import DreamEngine
+
+    path = DreamEngine().run(mode=mode, limit=limit)
+    print(f"Dream report: {path}")
+
+
 def main(argv: Sequence[str] | None = None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in ("-h", "--help", "help"):
@@ -355,6 +391,10 @@ def main(argv: Sequence[str] | None = None):
 
     if argv and argv[0] == "ui":
         _run_trace_console(argv[1:])
+        return
+
+    if argv and argv[0] == "dream":
+        _run_dream(argv[1:])
         return
 
     # Single-message mode

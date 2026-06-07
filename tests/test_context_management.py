@@ -122,6 +122,25 @@ def test_memory_store_scope_retrieval_and_project_context(tmp_path):
     assert "先写测试" not in store.get_scoped_context(["user", "project"])
 
 
+def test_memory_store_marks_stale_memory_as_review_needed_and_orders_it_last(tmp_path):
+    store = MemoryStore(tmp_path)
+    stale_path = store.save("old_layout", "old core path", "project", "src/ming/core/gate.py")
+    store.save("new_layout", "new router path", "project", "src/ming/core/cognitive_router.py")
+
+    store.mark_stale(stale_path, reason="Gate renamed to CognitiveRouter")
+
+    entries = store.get_by_types(["project"])
+    assert entries[-1].name == "old_layout"
+    assert entries[-1].stale is True
+    assert entries[-1].stale_reason == "Gate renamed to CognitiveRouter"
+
+    context = store.get_scoped_context(["project"])
+    assert context.index("new_layout") < context.index("old_layout")
+    assert "待复核记忆" in context
+    assert "Gate renamed to CognitiveRouter" in context
+    assert store.get_stale()[0].name == "old_layout"
+
+
 def test_agent_switches_active_context_scopes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = MingConfig(llm=LLMConfig(model="test-model", api_key="test"))

@@ -2,7 +2,7 @@
 
 Full pipeline per user turn:
   1. Context assembly (four-layer model)
-  2. Gate evaluation (7 rules → single or adversarial)
+  2. Cognitive routing (7 rules → single or adversarial)
   3a. Single mode: α_LOOP (reason → tool → loop)
   3b. Adversarial mode: Fork α/β → γ convergence
   4. Feedback: update Automaticity + memory
@@ -22,7 +22,7 @@ from ming.config import MingConfig, load_config
 from ming.context.manager import ContextManager
 from ming.core.adversarial import AdversarialResult, run_adversarial
 from ming.core.automaticity import AutomaticityStore
-from ming.core.gate import Gate
+from ming.core.cognitive_router import CognitiveRouter
 from ming.core.llm import LLMResponse, Message, call_llm
 from ming.core.loop_detection import LoopDetector
 from ming.core.notepad import NotepadStore
@@ -102,7 +102,8 @@ class Agent:
             compaction_threshold=self.config.context.compaction_threshold,
             safety_threshold=self.config.context.compaction_safety_threshold,
         )
-        self.gate = Gate()
+        self.cognitive_router = CognitiveRouter()
+        self.gate = self.cognitive_router  # compatibility for older integrations
         self.automaticity = AutomaticityStore()
         self.memory = MemoryStore()
         self.experience = ExperienceStore()
@@ -150,22 +151,22 @@ class Agent:
             logger.info("Context approaching limit, running compaction...")
             await self._run_compaction()
 
-        # Gate evaluation
+        # Cognitive routing
         automaticity = self.automaticity.get_automaticity(user_input)
         logger.debug(f"Automaticity for input: {automaticity:.2f}")
-        gate_decision = self.gate.evaluate(
+        routing_decision = self.cognitive_router.evaluate(
             user_input=user_input,
             context_tokens=self.context.current_tokens(),
             automaticity=automaticity,
             has_historical_divergence=self.experience.has_historical_divergence(user_input),
         )
-        logger.info(f"Gate decision: {gate_decision}")
-        route_message = "进入对抗分析" if gate_decision.is_adversarial else "使用单核执行"
-        self._emit_progress("route", route_message, detail=str(gate_decision.triggered_rules))
+        logger.info(f"CognitiveRouter decision: {routing_decision}")
+        route_message = "进入对抗分析" if routing_decision.is_adversarial else "使用单核执行"
+        self._emit_progress("route", route_message, detail=str(routing_decision.triggered_rules))
 
-        # Route based on gate decision
-        if gate_decision.is_adversarial:
-            logger.info(f"Entering adversarial mode (rules: {gate_decision.triggered_rules})")
+        # Route based on cognitive router decision
+        if routing_decision.is_adversarial:
+            logger.info(f"Entering adversarial mode (rules: {routing_decision.triggered_rules})")
             try:
                 result = await self._run_adversarial(user_input)
             except Exception as e:

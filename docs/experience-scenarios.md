@@ -48,12 +48,12 @@
 ## 4. 对抗档架构审查
 
 ```text
-请对当前 Ming 的架构做一次 independent review，重点看 Gate、Automaticity 和 Experience Pool 是否边界清楚
+请对当前 Ming 的架构做一次 independent review，重点看 CognitiveRouter、Automaticity 和 Experience Pool 是否边界清楚
 ```
 
 观察点：
 
-- Gate 是否命中显式 review / 架构规则。
+- CognitiveRouter 是否命中显式 review / 架构规则。
 - 是否进入 α/β/γ。
 - 输出是否把分歧翻译成用户能决策的问题。
 
@@ -74,7 +74,7 @@
 观察点：
 
 - `.ming/experience.jsonl` 是否新增记录。
-- 第二个问题是否更容易触发 Gate R6。
+- 第二个问题是否更容易触发 CognitiveRouter R6。
 
 ## 6. Fallback 测试
 
@@ -242,14 +242,29 @@ python -m ming "只回复 fallback ok"
 - `/forget memory` 删除 user 类型持久记忆。
 - `/forget session` 只清当前进程 session 层，不删磁盘文件。
 
-## 6.11.5 Memory Stale 测试
+## 6.11.5 待复核记忆测试
 
 先制造一条 project memory，然后在 Python 里调用 `MemoryStore.mark_stale(path, reason)` 或通过后续工具触发 stale 标记。
 
 观察点：
 
 - memory frontmatter 是否出现 `stale: true` 和 `stale_reason`。
-- stale 只是标记，不会直接删除记忆。
+- “待复核记忆”只是标记，不会直接删除记忆。
+- 注入 context 时是否带有“待复核记忆”标识，并排在普通高置信记忆之后。
+
+## 6.11.6 Dream 审阅报告测试
+
+先跑几轮会产生 trace/checkpoint 的任务，再执行：
+
+```powershell
+python -m ming dream
+```
+
+观察点：
+
+- `.ming/dreams/` 是否新增 `*_light.json`。
+- 报告是否包含最近任务摘要、project lessons、待复核记忆候选和 next actions。
+- Dream 不应自动改写或删除 `.ming/memory/` 中的记忆。
 
 ## 6.12 Context Scope 测试
 

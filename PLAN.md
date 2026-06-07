@@ -8,9 +8,9 @@
 
 ## 术语校准
 
-### Gate 命名问题
+### 认知路由与 Gate 命名
 
-当前代码里的 `Gate` 指的是“认知路由器”：根据风险、上下文、Automaticity、历史分歧等信号，决定走单核还是对抗分析。
+当前代码里的认知路由器已命名为 `CognitiveRouter`：根据风险、上下文、Automaticity、历史分歧等信号，决定走单核还是对抗分析。
 
 业界常说的 gate 更常指 **审批、权限、门禁**，例如：
 
@@ -19,11 +19,11 @@
 - 数据/网络/账号权限控制。
 - human approval gate。
 
-因此后续建议：
+当前约定：
 
-- 将当前 `Gate` 概念逐步改名为 `CognitiveRouter` 或 `RoutingGate`。
-- 新增真正的 `PermissionGate` / `SafetyGate`，负责审批和门禁。
-- 文档中明确区分“认知路由”和“权限门禁”，避免混用。
+- `CognitiveRouter` 负责认知路由。
+- `PermissionGate` 负责真正的权限门禁。
+- `ming.core.gate.Gate` 保留为兼容 alias，不作为新文档和新代码的首选命名。
 
 ## 已落地
 
@@ -50,7 +50,7 @@
 
 ### P3：认知路由 + Automaticity 基础版
 
-- 现名 `Gate` 的 7 规则启发式路由。
+- `CognitiveRouter` 的 7 规则启发式路由。
 - Automaticity 文件式存储。
 - Tier signal 反馈更新。
 - Experience Pool 记录历史分歧，并接入路由规则。
@@ -106,13 +106,13 @@
 - Experience Pool：失败、分歧、策略效果和工具有效性。
 - Automaticity：行为模式熟练度，不是单次任务分数。
 - NotePad：每轮运行中的 scratch notes，记录关键假设、发现、未解决问题。
-- Stale memory reconsolidation：支持 stale/stale_reason 标记。
+- 待复核记忆：支持 stale/stale_reason 标记、context 标注和注入降权。
 - 清空 Memory：提供按 scope 清空，而不是一键删所有。
 
 剩余增强：
 
-- Dreaming：Light/Deep/REM 巩固、降噪、合并、遗忘。
-- stale memory 检索时自动重新验证、降权、更新或删除。
+- Dreaming：已落地 Light 非破坏性审阅报告；Deep/REM 巩固、降噪、合并、遗忘仍未做。
+- 待复核记忆后续增强：检索时自动重新验证、更新或删除。
 
 建议 scope：
 
@@ -230,8 +230,8 @@
 ## 近期优先级建议
 
 1. **重命名与门禁拆分**
-   - 把当前 `Gate` 文档改为 `CognitiveRouter`。
-   - 新增 `PermissionGate` 设计。
+   - 已把当前 `Gate` 实现改为 `CognitiveRouter`，并保留兼容 alias。
+   - 已落地 `PermissionGate` 基础门禁。
 
 2. **Context 工作台**
    - 已落地 `TodoState`。
@@ -253,7 +253,7 @@
 5. **Memory 升级**
    - 会话摘要自动提取。
    - project memory。
-   - stale memory reconsolidation。
+   - 待复核记忆标记、降权和 Dream Light 审阅报告。
 
 6. **低摩擦交互**
    - 已落地默认缩略 agent-loop 进度。

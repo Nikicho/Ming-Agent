@@ -62,6 +62,14 @@ python -m ming ui --port 8765
 
 打开 `http://127.0.0.1:8765` 后，可以查看最近一轮 agent-loop 的任务、TODO、工具步骤、进展判断、可公开思路摘要、subagent 状态和 trace/checkpoint/notepad 路径。当前 UI 读取本地 `.ming/` 运行产物，不需要 API key，也不会展示底层 LiteLLM/provider 噪音日志。
 
+Dream 轻量审阅报告：
+
+```powershell
+python -m ming dream
+```
+
+Dream 当前是非破坏性的离线整理器：读取 `.ming/traces/`、`.ming/checkpoints/` 和 `.ming/memory/`，生成 `.ming/dreams/<timestamp>_light.json`。它只提出任务摘要、project lessons、待复核记忆和重复记忆候选，不会自动改写记忆。
+
 交互命令：
 
 | 命令 | 作用 |
@@ -81,6 +89,7 @@ python -m ming ui --port 8765
 | `/scope user,project,global` | 切换当前注入上下文的记忆作用域 |
 | `/expand <event_id>` | 展开最近 trace 中某个事件 |
 | `/cleanup` | 清理旧 checkpoint |
+| `/dream` | 生成一次非破坏性的 Dream 审阅报告 |
 | `/trace` | 查看最近一轮 trace 文件路径 |
 | `/checkpoint` | 查看最近 checkpoint 文件路径 |
 | `/details` | 切换 agent-loop 进度详情展示 |
@@ -129,7 +138,7 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 
 ### PermissionGate
 
-`PermissionGate` 是真正的工具门禁，和认知路由 `Gate` 分开。当前会阻断高风险 shell 命令，例如 `git reset --hard`、`git push --force`、`rm -rf`、`rmdir /s`、`format`、`drop database` 等。
+`PermissionGate` 是真正的工具门禁，和认知路由 `CognitiveRouter` 分开。当前会阻断高风险 shell 命令，例如 `git reset --hard`、`git push --force`、`rm -rf`、`rmdir /s`、`format`、`drop database` 等。
 
 被阻断的工具调用会以 `[Permission denied]` 形式回喂给模型，让模型换成可撤销、可审查的方案。当前版本还没有交互式审批弹窗；需要危险操作时，应由用户明确手动执行或后续接入审批机制。
 
@@ -181,7 +190,7 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 
 ### 认知路由 + 对抗分析
 
-每轮输入都会经过当前名为 `Gate` 的认知路由器。这里的 Gate 不是业界常说的审批/门禁，当前更准确地说是认知路由器；真正的工具门禁由 `PermissionGate` 负责。命中以下情况会升到对抗档：
+每轮输入都会经过 `CognitiveRouter` 认知路由器。它不是业界常说的审批/门禁，而是根据任务风险、上下文、Automaticity 和历史分歧决定走单核还是对抗分析；真正的工具门禁由 `PermissionGate` 负责。命中以下情况会升到对抗档：
 
 - 不可逆操作，例如删除、强推、硬重置。
 - 架构性修改。
@@ -197,9 +206,19 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 
 - 显式记忆：用户说“记住……”时会写入 `.ming/memory/*.md`。
 - 会话摘要提取：可从会话消息中提取 user/project 类型记忆。
-- stale reconsolidation：记忆可标记 stale 与 stale_reason，供后续重新验证或降权。
+- 待复核记忆：旧事实可标记 `stale` / `stale_reason`，注入 context 时会标注“待复核记忆”并排在高置信记忆之后。
 - Automaticity：按行为模式维护熟练度，存储在 `.ming/automaticity.json`。
-- Experience Pool：每轮记录 tier signal，存储在 `.ming/experience.jsonl`；相似任务如果历史上出现过分歧，会触发 Gate 的历史分歧规则。
+- Experience Pool：每轮记录 tier signal，存储在 `.ming/experience.jsonl`；相似任务如果历史上出现过分歧，会触发认知路由器的历史分歧规则。
+
+### Dream
+
+`DreamEngine` 是轻量记忆巩固器的第一版。它不会后台神秘改写“大脑”，而是手动触发、只读扫描、生成审阅报告：
+
+- 最近任务摘要：turn、工具数量、checkpoint changed files。
+- project lessons：从最近结果和 changed files 中提取可沉淀线索。
+- 待复核记忆候选：列出 stale memory 及 stale_reason。
+- 重复记忆候选：按 type + description 查找可合并项。
+- next actions：给出需要人类确认的整理动作。
 
 ### Skill Index / Tool Need
 
@@ -245,7 +264,9 @@ Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trus
 - `/expand <event_id>` 展开 trace event。
 - checkpoint cleanup。
 - ErrorClassifier 与 T3 fail 重入 loop。
-- session/project memory extract 与 stale 标记。
+- session/project memory extract 与待复核记忆标记、降权和 context 标注。
+- `CognitiveRouter` 认知路由命名与旧 `Gate` 兼容导出。
+- Dream 非破坏性审阅报告。
 - SkillIndex 与 ToolNeedProposal。
 - 默认日志不进入 debug 模式。
 - 默认压制 LiteLLM/provider 控制台噪音，改用 agent-loop 缩略进度。

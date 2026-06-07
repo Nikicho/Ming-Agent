@@ -25,14 +25,24 @@ class MemoryEntry:
         mem_type: str,
         content: str,
         file_path: str = "",
+        stale: bool = False,
+        stale_reason: str = "",
     ):
         self.name = name
         self.description = description
         self.type = mem_type
         self.content = content
         self.file_path = file_path
+        self.stale = stale
+        self.stale_reason = stale_reason
 
     def to_context_string(self) -> str:
+        if self.stale:
+            reason = f" stale_reason={self.stale_reason}" if self.stale_reason else ""
+            return (
+                f"[待复核记忆:{self.type}: {self.name}{reason}] "
+                f"{self.description}\n{self.content}"
+            )
         return f"[{self.type}: {self.name}] {self.description}\n{self.content}"
 
 
@@ -80,6 +90,8 @@ class MemoryStore:
             mem_type=meta.get("type", "unknown"),
             content=parts[2].strip(),
             file_path=str(path),
+            stale=bool(meta.get("stale", False)),
+            stale_reason=str(meta.get("stale_reason", "")),
         )
 
     def save(self, name: str, description: str, mem_type: str, content: str) -> Path:
@@ -152,7 +164,7 @@ class MemoryStore:
             if score > 0:
                 scored.append((score, entry))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
+        scored.sort(key=lambda x: (x[0], not x[1].stale), reverse=True)
         return [entry for _, entry in scored[:max_results]]
 
     def get_all(self) -> list[MemoryEntry]:
@@ -162,7 +174,26 @@ class MemoryStore:
     def get_by_types(self, mem_types: list[str]) -> list[MemoryEntry]:
         """Return memories matching the requested scopes/types."""
         wanted = set(mem_types)
-        return [entry for entry in self._entries if entry.type in wanted]
+        entries = [entry for entry in self._entries if entry.type in wanted]
+        return sorted(entries, key=lambda entry: entry.stale)
+
+    def get_stale(self) -> list[MemoryEntry]:
+        """Return memories marked as needing review."""
+        return [entry for entry in self._entries if entry.stale]
+
+    def mark_fresh(self, path: str | Path) -> None:
+        """Clear stale markers after a memory has been manually reviewed."""
+        memory_path = Path(path)
+        text = memory_path.read_text(encoding="utf-8", errors="replace")
+        if not text.startswith("---"):
+            return
+        parts = text.split("---", 2)
+        meta = yaml.safe_load(parts[1]) or {}
+        meta.pop("stale", None)
+        meta.pop("stale_reason", None)
+        frontmatter = yaml.dump(meta, allow_unicode=True, default_flow_style=False)
+        memory_path.write_text(f"---\n{frontmatter}---{parts[2]}", encoding="utf-8")
+        self._load_all()
 
     def get_scoped_context(self, mem_types: list[str], max_chars: int = 5000) -> str:
         """Build context from selected memory scopes only."""

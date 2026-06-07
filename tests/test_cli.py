@@ -19,6 +19,8 @@ def test_main_prints_help_without_entering_interactive(capsys):
     assert "/expand" in output
     assert "/cleanup" in output
     assert "python -m ming ui" in output
+    assert "python -m ming dream" in output
+    assert "/dream" in output
 
 
 def test_setup_logging_defaults_file_log_to_info(tmp_path, monkeypatch):
@@ -37,6 +39,16 @@ def test_setup_logging_defaults_file_log_to_info(tmp_path, monkeypatch):
 
     assert "info should be recorded" in text
     assert "debug should stay hidden" not in text
+
+
+def test_main_runs_dream_without_api_key(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    cli.main(["dream"])
+
+    output = capsys.readouterr().out
+    assert "Dream report:" in output
+    assert list((tmp_path / ".ming" / "dreams").glob("*_light.json"))
 
 
 def test_setup_logging_suppresses_noisy_provider_console_logs(tmp_path, monkeypatch):
