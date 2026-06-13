@@ -238,11 +238,26 @@ class Agent:
 
             # Call LLM
             self._emit_progress("llm", f"调用模型，第 {iteration} 轮")
-            response: LLMResponse = await call_llm(
-                messages=self.context.get_messages(),
-                config=self.config.llm,
-                tools=selected_tool_schemas or None,
-            )
+            try:
+                response: LLMResponse = await call_llm(
+                    messages=self.context.get_messages(),
+                    config=self.config.llm,
+                    tools=selected_tool_schemas or None,
+                )
+            except asyncio.CancelledError:
+                msg = "[Ming: 已停止本轮思考]"
+                trace.add_observation("cancelled", "用户停止了当前 agent-loop。")
+                self.notepad.add_blocker(notepad_path, "用户停止了当前 agent-loop。")
+                self.context.add_message(Message(role="assistant", content=msg))
+                return self._finish_turn(msg, trace, todo, notepad_path, complete_todo=False)
+            except Exception as exc:
+                logger.error("LLM call failed", exc_info=True)
+                detail = f"{type(exc).__name__}: {exc}"
+                msg = f"[Ming: 模型调用失败，已停止本轮执行]\n{detail}"
+                trace.add_observation("llm_error", detail)
+                self.notepad.add_blocker(notepad_path, f"llm_error: {detail}")
+                self.context.add_message(Message(role="assistant", content=msg))
+                return self._finish_turn(msg, trace, todo, notepad_path, complete_todo=False)
 
             # Case 1: Tool calls → execute and loop
             if response.tool_calls:
@@ -422,8 +437,10 @@ class Agent:
         trace: RunTrace,
         todo: TodoState,
         notepad_path: Path,
+        complete_todo: bool = True,
     ) -> str:
-        todo.complete_all()
+        if complete_todo:
+            todo.complete_all()
         trace.final_output = final_output
         trace_path = trace.save(self.trace_root)
         checkpoint_path = self.checkpoints.save(

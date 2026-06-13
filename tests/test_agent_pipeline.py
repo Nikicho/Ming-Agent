@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -206,3 +207,52 @@ async def test_agent_emits_summary_progress_events(tmp_path, monkeypatch):
         "done",
     ]
     assert any(event.message == "执行工具 file_write" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_agent_returns_graceful_message_and_trace_on_llm_failure(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=5),
+    )
+
+    async def failing_llm(messages, config, tools=None):
+        raise RuntimeError("provider disconnected")
+
+    monkeypatch.setattr("ming.core.agent.call_llm", failing_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    result = await agent.chat("帮我写一个番茄钟页面")
+
+    assert "模型调用失败" in result
+    assert "provider disconnected" in result
+    trace_files = list((tmp_path / ".ming" / "traces").glob("*.json"))
+    checkpoint_files = list((tmp_path / ".ming" / "checkpoints").glob("*/checkpoint.json"))
+    assert trace_files
+    assert checkpoint_files
+    assert "llm_error" in trace_files[0].read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_agent_saves_cancelled_turn_when_user_stops_thinking(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=5),
+    )
+
+    async def cancelled_llm(messages, config, tools=None):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("ming.core.agent.call_llm", cancelled_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    result = await agent.chat("帮我写一个番茄钟页面")
+
+    assert "已停止本轮思考" in result
+    trace_files = list((tmp_path / ".ming" / "traces").glob("*.json"))
+    assert trace_files
+    trace_text = trace_files[0].read_text(encoding="utf-8")
+    assert "cancelled" in trace_text
+    assert "completed" not in trace_text

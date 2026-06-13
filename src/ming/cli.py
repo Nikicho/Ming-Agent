@@ -126,7 +126,8 @@ def print_banner():
             "  /dream  Run a light Dream review report\n"
             "  /trace   Show the latest run trace file\n"
             "  /checkpoint Show the latest checkpoint file\n"
-            "  /details Toggle detailed progress",
+            "  /details Toggle detailed progress\n\n"
+            "[dim]Press Ctrl+C while Ming is running to stop the current turn.[/dim]",
             title="[bold]Ming Agent[/bold]",
             border_style="cyan",
         )
@@ -292,7 +293,13 @@ async def interactive_loop():
             console.print()
 
         except KeyboardInterrupt:
-            console.print("\n[dim]Use /quit to exit.[/dim]")
+            console.print("\n[dim]Stopped current turn. Use /quit to exit.[/dim]")
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task and hasattr(task, "uncancel"):
+                task.uncancel()
+            console.print("\n[dim]Stopped current turn.[/dim]\n")
+            continue
         except EOFError:
             console.print("\n[dim]Input closed.[/dim]")
             break
@@ -327,6 +334,9 @@ Interactive commands:
   /trace    Show the latest run trace file
   /checkpoint Show the latest checkpoint file
   /details  Toggle detailed progress
+
+Stop:
+  Press Ctrl+C while Ming is running to stop the current turn
 """
 
 
@@ -414,7 +424,10 @@ def main(argv: Sequence[str] | None = None):
 
     # Interactive mode
     print_banner()
-    asyncio.run(interactive_loop())
+    try:
+        asyncio.run(interactive_loop())
+    except KeyboardInterrupt:
+        console.print("\n[dim]Stopped.[/dim]")
 
 
 if __name__ == "__main__":

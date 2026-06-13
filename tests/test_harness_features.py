@@ -27,6 +27,26 @@ def test_tool_selector_prefers_web_tools_for_search_requests():
     assert "bash" not in selected
 
 
+def test_tool_selector_keeps_local_page_tasks_on_file_tools():
+    selected = ToolSelector().select_tool_names(
+        "帮我写个简单页面，并且运行起来，页面是个番茄钟",
+        available_tool_names=[
+            "bash",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "web_search",
+            "web_fetch",
+            "web_research",
+        ],
+    )
+
+    assert "file_write" in selected
+    assert "bash" in selected
+    assert "web_research" not in selected
+    assert "web_search" not in selected
+
+
 @pytest.mark.asyncio
 async def test_agent_persists_trace_checkpoint_todo_and_notepad(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
