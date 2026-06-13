@@ -208,6 +208,7 @@ class Agent:
         turn_start = time.time()
         used_tools = False
         t3_repair_attempted = False
+        tool_strategy_replan_attempted = False
         self.loop_detector.reset()
         self.progress_tracker.reset()
         selected_tool_names = self.tool_selector.select_tool_names(user_input, self.tools.names())
@@ -267,6 +268,7 @@ class Agent:
             # Case 1: Tool calls → execute and loop
             if response.tool_calls:
                 used_tools = True
+                replan_requested = False
                 self.context.add_message(Message(
                     role="assistant",
                     content=response.content,
@@ -355,6 +357,29 @@ class Agent:
                         )
                         self.context.add_message(Message(role="assistant", content=msg))
                         return self._finish_turn(msg, trace, todo, notepad_path)
+
+                    if (
+                        assessment.decision == "replan"
+                        and not tool_strategy_replan_attempted
+                    ):
+                        tool_strategy_replan_attempted = True
+                        replan_prompt = self._build_tool_strategy_replan_prompt(
+                            assessment,
+                            self.progress_tracker.events[-3:],
+                        )
+                        self._emit_progress(
+                            "route",
+                            "工具调用策略失败，切换执行方式",
+                            detail=assessment.reason,
+                        )
+                        trace.add_observation("tool_replan", replan_prompt)
+                        self.notepad.add_blocker(notepad_path, f"tool_replan: {assessment.reason}")
+                        self.context.add_message(Message(role="user", content=replan_prompt))
+                        replan_requested = True
+                        break
+
+                if replan_requested:
+                    continue
 
                 continue
 
@@ -485,6 +510,25 @@ class Agent:
         return (
             f"当前用户请求：{user_input}\n"
             "只使用和本轮任务相关的工具、记忆、TODO、Notepad 和 pinned evidence。"
+        )
+
+    def _build_tool_strategy_replan_prompt(
+        self,
+        assessment,
+        recent_events: list[ToolEvent],
+    ) -> str:
+        diagnostics = "; ".join(
+            f"{event.tool_name}:{event.progress}:{event.diagnostic[:120]}"
+            for event in recent_events
+            if event.diagnostic
+        )
+        return (
+            "工具调用策略失败，需要换一种执行方式继续，不要把问题交给用户。\n"
+            f"原因：{assessment.reason}\n"
+            f"最近诊断：{diagnostics or '无详细诊断'}\n"
+            "请立即调整策略：不要继续用损坏的 JSON；不要用 bash 嵌入大段多行内容。"
+            "写文件优先使用 file_write 的合法 JSON 参数；修改已有文件优先用 file_edit；"
+            "如果内容很长，缩小到必要改动或分块写入。"
         )
 
     async def _run_adversarial(self, user_input: str) -> AdversarialResult:

@@ -62,6 +62,41 @@ def test_tool_stall_failure_explains_why_agent_paused():
     assert failure.category == "tool_stall"
 
 
+def test_tool_stall_failure_names_internal_tool_strategy_errors():
+    assessment = ProgressAssessment(
+        decision="stop",
+        reason="工具调用策略失败：连续工具参数错误或写入策略失败。",
+    )
+    events = [
+        ToolEvent(
+            "file_write",
+            "file_write",
+            "error",
+            83,
+            0,
+            "tool_input_error",
+            diagnostic="Invalid JSON arguments: Unterminated string",
+        ),
+        ToolEvent(
+            "bash",
+            "bash",
+            "error",
+            34,
+            0,
+            "tool_strategy_error",
+            diagnostic="Command line is too long",
+        ),
+    ]
+
+    failure = format_tool_stall(assessment, events)
+
+    assert failure.category == "tool_strategy_error"
+    assert "工具调用格式或写入策略失败" in failure.user_message
+    assert "Ming 内部执行策略问题" in failure.user_message
+    assert "补充文件" not in failure.user_message
+    assert "Invalid JSON arguments" in failure.technical_detail
+
+
 @pytest.mark.asyncio
 async def test_agent_reenters_loop_after_t3_failure(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

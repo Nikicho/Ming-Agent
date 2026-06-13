@@ -162,6 +162,64 @@ async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_agent_replans_after_tool_argument_failures_before_stopping(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=8),
+    )
+    calls = 0
+
+    async def fake_llm(messages, config, tools=None):
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "id": f"bad-{calls}",
+                        "type": "function",
+                        "function": {
+                            "name": "file_write",
+                            "arguments": '{"path": "out.html", "content": "unterminated',
+                        },
+                    }
+                ],
+            )
+        if calls == 3:
+            assert "工具调用策略失败" in messages[-1].content
+            assert "不要继续用损坏的 JSON" in messages[-1].content
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "id": "good-1",
+                        "type": "function",
+                        "function": {
+                            "name": "file_write",
+                            "arguments": json.dumps({"path": "out.html", "content": "ok"}),
+                        },
+                    }
+                ],
+            )
+        if calls == 4:
+            return LLMResponse(content="FINAL: 已写入 out.html", finish_reason="stop")
+        return LLMResponse(content="PASS: 文件写入结果支持最终回复", finish_reason="stop")
+
+    monkeypatch.setattr("ming.core.agent.call_llm", fake_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    result = await agent.chat("创建 out.html")
+
+    assert result == "已写入 out.html"
+    assert (tmp_path / "out.html").read_text(encoding="utf-8") == "ok"
+    assert calls == 5
+
+
+@pytest.mark.asyncio
 async def test_agent_emits_summary_progress_events(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = MingConfig(

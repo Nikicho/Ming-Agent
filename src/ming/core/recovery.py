@@ -95,26 +95,53 @@ def format_tool_stall(
     """Explain a no-progress tool stall in product language."""
     recent_events = events[-3:]
     tool_names = _join_unique(event.tool_name for event in recent_events) or "工具"
+    if _has_tool_strategy_error(recent_events):
+        user_message = (
+            "[Ming: 工具调用格式或写入策略失败]\n"
+            "这更像是 Ming 内部执行策略问题：刚才的工具参数格式不合法，"
+            "或尝试用不稳定的长命令写入内容。\n"
+            f"刚才主要尝试了：{tool_names}。\n"
+            "我已停止本轮，避免继续用同一种错误方式空转。建议直接重试；"
+            "Ming 应改用有效 JSON 的 file_write/file_edit，或把大文件分块写入。"
+        )
+        return FailureMessage(
+            category="tool_strategy_error",
+            user_message=user_message,
+            technical_detail=_format_tool_stall_detail(assessment, recent_events),
+            retryable=True,
+            recoverable=True,
+        )
+
     user_message = (
         "[Ming: 我暂停了本轮执行]\n"
         "连续 3 次工具调用没有拿到可用的新信息，所以我先停下来，避免继续空转。\n"
         f"刚才主要尝试了：{tool_names}。\n"
         "建议：换一种工具、缩小目标，或补充文件、链接、运行方式后继续。"
     )
-    technical_detail = json.dumps(
+    return FailureMessage(
+        category="tool_stall",
+        user_message=user_message,
+        technical_detail=_format_tool_stall_detail(assessment, recent_events),
+        retryable=False,
+        recoverable=True,
+    )
+
+
+def _has_tool_strategy_error(events: list[ToolEvent]) -> bool:
+    return any(event.progress in {"tool_input_error", "tool_strategy_error"} for event in events)
+
+
+def _format_tool_stall_detail(
+    assessment: ProgressAssessment,
+    recent_events: list[ToolEvent],
+) -> str:
+    return json.dumps(
         {
             "assessment": asdict(assessment),
             "recent_events": [asdict(event) for event in recent_events],
         },
         ensure_ascii=False,
         indent=2,
-    )
-    return FailureMessage(
-        category="tool_stall",
-        user_message=user_message,
-        technical_detail=technical_detail,
-        retryable=False,
-        recoverable=True,
     )
 
 
