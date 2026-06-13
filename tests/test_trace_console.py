@@ -95,6 +95,19 @@ def test_trace_console_event_stream_reads_live_events(tmp_path):
     assert "event: tool\n" in chunk
     assert "执行工具 file_write" in chunk
 
+
+def test_trace_console_event_stream_resumes_after_last_seq(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+    first = app.live_events.append(stage="context", message="prepare", turn_id="turn-1")
+    second = app.live_events.append(stage="tool", message="run", turn_id="turn-1")
+
+    chunk = next(app.event_stream(last_seq=first["seq"], poll_seconds=0, heartbeat_seconds=999))
+
+    assert f"id: {second['seq']}\n" in chunk
+    assert "event: tool\n" in chunk
+    assert "prepare" not in chunk
+
+
 def test_trace_console_submit_chat_validates_message(tmp_path):
     app = TraceConsoleApp(tmp_path)
 

@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+SCHEMA_VERSION = 1
+DEFAULT_MAX_EVENTS = 1000
+
+SECRET_PATTERNS = [
+    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
+    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s,;]+"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b"),
+]
+
 
 class LiveEventStore:
     """Append-only JSONL event store under ``.ming/live``."""
 
-    def __init__(self, root: str | Path | None = None):
+    def __init__(self, root: str | Path | None = None, max_events: int = DEFAULT_MAX_EVENTS):
         self.root = Path(root) if root else Path.cwd() / ".ming" / "live"
         self.path = self.root / "events.jsonl"
+        self.max_events = max_events
         self._lock = threading.Lock()
 
     def append(
@@ -28,17 +39,19 @@ class LiveEventStore:
         """Append a live event and return the persisted payload."""
         with self._lock:
             event = {
+                "schema_version": SCHEMA_VERSION,
                 "seq": self._next_seq(),
                 "time": datetime.now().isoformat(timespec="seconds"),
                 "turn_id": turn_id,
                 "stage": stage,
-                "message": message,
-                "detail": detail,
+                "message": self._sanitize(message),
+                "detail": self._sanitize(detail),
                 "type": event_type,
             }
             self.root.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            self._rotate_if_needed()
             return event
 
     def since(self, seq: int = 0) -> list[dict[str, Any]]:
@@ -76,3 +89,25 @@ class LiveEventStore:
             if isinstance(payload, dict):
                 events.append(payload)
         return events
+
+    def _rotate_if_needed(self) -> None:
+        if self.max_events <= 0:
+            return
+        events = self._read_all()
+        if len(events) <= self.max_events:
+            return
+        kept = events[-self.max_events :]
+        with self.path.open("w", encoding="utf-8") as handle:
+            for event in kept:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _sanitize(self, value: str) -> str:
+        text = str(value)
+        for pattern in SECRET_PATTERNS:
+            text = pattern.sub(self._redacted_match, text)
+        return text
+
+    def _redacted_match(self, match: re.Match[str]) -> str:
+        if match.lastindex:
+            return f"{match.group(1)}[redacted]"
+        return "[redacted]"

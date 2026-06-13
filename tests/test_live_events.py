@@ -22,3 +22,39 @@ def test_live_event_store_tolerates_bad_lines(tmp_path):
 
     assert event["seq"] == 1
     assert store.since(0)[0]["stage"] == "done"
+
+
+def test_live_event_store_adds_schema_version(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+
+    event = store.append(stage="context", message="prepare", turn_id="turn-1")
+
+    assert event["schema_version"] == 1
+    assert store.since(0)[0]["schema_version"] == 1
+
+
+def test_live_event_store_rotates_old_events(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live", max_events=2)
+
+    store.append(stage="context", message="one")
+    second = store.append(stage="llm", message="two")
+    third = store.append(stage="done", message="three")
+
+    events = store.since(0)
+    assert [event["seq"] for event in events] == [second["seq"], third["seq"]]
+    assert [event["message"] for event in events] == ["two", "three"]
+
+
+def test_live_event_store_redacts_api_key_like_values(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+
+    event = store.append(
+        stage="error",
+        message="failed with api_key=sk-1234567890abcdef",
+        detail="Authorization: Bearer secret-token-123456",
+    )
+
+    assert "sk-1234567890abcdef" not in event["message"]
+    assert "secret-token-123456" not in event["detail"]
+    assert "[redacted]" in event["message"]
+    assert "[redacted]" in event["detail"]

@@ -682,46 +682,52 @@ git commit -m "feat: introduce react web ui"
 
 ### Task 9: Event Contract Hardening
 
+Status: completed in `src/ming/core/live_events.py` and `src/ming/ui/trace_console.py`.
+
 **Files:**
 - Modify: `src/ming/core/live_events.py`
 - Modify: `src/ming/ui/chat_runtime.py`
 - Test: `tests/test_live_events.py`
 
-- [ ] Add schema version field.
-- [ ] Add max event log size or rotation policy.
-- [ ] Add sanitization test: API key-looking strings are redacted from details.
-- [ ] Add reconnection behavior using `Last-Event-ID`.
-- [ ] Commit: `fix: harden live event contract`.
+- [x] Add schema version field.
+- [x] Add max event log size or rotation policy.
+- [x] Add sanitization test: API key-looking strings are redacted from details.
+- [x] Add reconnection behavior using `Last-Event-ID`.
+- [x] Commit: `fix: harden live event contract`.
 
 ### Task 10: Stop UX
+
+Status: completed in inline HTML and `src/ming/ui/chat_runtime.py`.
 
 **Files:**
 - Modify: `src/ming/ui/chat_runtime.py`
 - Modify: `web/src/App.tsx` or inline HTML depending on phase
 - Test: `tests/test_chat_runtime.py`
 
-- [ ] Stop button sends `/api/turns/current/stop`.
-- [ ] Server cancels task.
-- [ ] UI shows “已停止本轮思考”.
-- [ ] New message can be sent after stop.
-- [ ] Commit: `feat: add stop control to web ui`.
+- [x] Stop button sends `/api/turns/current/stop`.
+- [x] Server cancels task.
+- [x] UI shows “已停止本轮思考”.
+- [x] New message can be sent after stop.
+- [x] Commit: `feat: add stop control to web ui`.
 
 ### Task 11: Documentation And Experience Scenarios
+
+Status: completed in `README.md` and `docs/experience-scenarios.md`.
 
 **Files:**
 - Modify: `README.md`
 - Modify: `docs/experience-scenarios.md`
 
-- [ ] Add Web UI usage.
-- [ ] Add SSE troubleshooting.
-- [ ] Add known limitations.
-- [ ] Add validation scenarios:
+- [x] Add Web UI usage.
+- [x] Add SSE troubleshooting.
+- [x] Add known limitations.
+- [x] Add validation scenarios:
   - simple file creation
   - local HTML page generation
   - long request + stop
   - tool error
   - model error
-- [ ] Commit: `docs: document web ui sse workflow`.
+- [x] Commit: `docs: document web ui sse workflow`.
 
 ---
 

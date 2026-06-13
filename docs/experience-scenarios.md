@@ -336,3 +336,93 @@ python -m ming dream
 
 - 最近一轮消息是否被移除。
 - 后续回答是否不再受刚才错误方案影响。
+
+## Web UI / SSE 专项压测
+
+启动方式：
+
+```powershell
+cd D:\Ming
+python -m ming ui --port 8765
+```
+
+打开 `http://127.0.0.1:8765`。如果页面还是旧的 Trace Console，先停掉旧的 `python -m ming ui` 进程，再在项目根目录执行：
+
+```powershell
+python -m pip install -e .
+python -m ming ui --port 8765
+```
+
+### A. 简单文件生成
+
+在 Web UI 输入：
+
+```text
+创建 scratch/webui_demo.txt，内容写入 hello web ui，然后读取确认
+```
+
+观察点：
+
+- Conversation 区出现用户消息、turn started、最终回复。
+- Live Events 依次出现 `submitted`、`context`、`route`、`llm`、`tool`、`verify`、`done`、`final`。
+- `.ming/traces/` 和 `.ming/checkpoints/` 出现对应记录。
+
+### B. 长任务 + Stop
+
+在 Web UI 输入：
+
+```text
+反复检查一个不存在的文件 scratch/not_exist_forever.txt，直到找到答案
+```
+
+运行中点击 Stop。
+
+观察点：
+
+- Conversation 出现“已停止本轮思考”。
+- Live Events 只出现一条 `cancelled`，不重复刷屏。
+- Stop 后 Send 按钮恢复可用，可以继续发下一条消息。
+
+### C. 工具错误
+
+在 Web UI 输入：
+
+```text
+读取 scratch/definitely_missing_file.txt，并说明结果
+```
+
+观察点：
+
+- 页面不应卡死。
+- Agent Loop/Trace 里能看到工具错误。
+- 最终回复应说明文件不存在或读取失败，而不是输出 Python traceback。
+
+### D. 模型错误
+
+临时把 `config/local.yaml` 的模型改成不可用值，或移除 API key 后重启 UI，再从页面发送：
+
+```text
+只回复 ok
+```
+
+观察点：
+
+- 页面应出现 `error` live event。
+- Conversation 显示模型调用失败摘要。
+- `.ming/traces/` 中保留失败 turn，方便复盘。
+
+### E. SSE 重连
+
+打开一个终端：
+
+```powershell
+curl.exe -N http://127.0.0.1:8765/api/events
+```
+
+再从 Web UI 发送简单任务。
+
+观察点：
+
+- curl 能持续收到 `id:`、`event:`、`data:` 格式的 SSE。
+- 浏览器刷新后，页面会重新连接 `/api/events`。
+- 事件 detail 中疑似 `api_key=...`、`Authorization: Bearer ...`、`sk-...` 的内容应被替换为 `[redacted]`。
