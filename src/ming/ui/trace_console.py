@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from ming.core.live_events import LiveEventStore
 
 
 class TraceConsoleState:
@@ -262,6 +265,7 @@ class TraceConsoleApp:
     def __init__(self, workspace_root: str | Path | None = None):
         self.workspace_root = Path(workspace_root or Path.cwd())
         self.state_builder = TraceConsoleState(self.workspace_root)
+        self.live_events = LiveEventStore(self.workspace_root / ".ming" / "live")
 
     def state(self) -> dict[str, Any]:
         return self.state_builder.load()
@@ -271,6 +275,40 @@ class TraceConsoleApp:
 
     def render_index(self) -> str:
         return INDEX_HTML
+
+    def format_sse(self, event: dict[str, Any]) -> str:
+        event_name = str(event.get("stage") or event.get("type") or "message")
+        data = json.dumps(event, ensure_ascii=False)
+        return f"id: {event.get('seq', 0)}\nevent: {event_name}\ndata: {data}\n\n"
+
+    def event_stream(
+        self,
+        last_seq: int = 0,
+        poll_seconds: float = 1.0,
+        heartbeat_seconds: float = 10.0,
+    ):
+        last_heartbeat = time.monotonic()
+        while True:
+            events = self.live_events.since(last_seq)
+            for event in events:
+                last_seq = max(last_seq, int(event.get("seq", 0)))
+                yield self.format_sse(event)
+            if poll_seconds <= 0:
+                return
+            now = time.monotonic()
+            if now - last_heartbeat >= heartbeat_seconds:
+                last_heartbeat = now
+                heartbeat = {
+                    "seq": last_seq,
+                    "time": datetime.now().isoformat(timespec="seconds"),
+                    "turn_id": "",
+                    "stage": "heartbeat",
+                    "message": "keep-alive",
+                    "detail": "",
+                    "type": "heartbeat",
+                }
+                yield self.format_sse(heartbeat)
+            time.sleep(poll_seconds)
 
     def serve(self, host: str = "127.0.0.1", port: int = 8765) -> None:
         app = self
@@ -283,6 +321,9 @@ class TraceConsoleApp:
                     return
                 if path == "/api/state":
                     self._send(200, app.state_json(), "application/json; charset=utf-8")
+                    return
+                if path == "/api/events":
+                    self._send_sse()
                     return
                 self._send(404, "Not found", "text/plain; charset=utf-8")
 
@@ -297,6 +338,23 @@ class TraceConsoleApp:
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(payload)
+
+            def _send_sse(self) -> None:
+                try:
+                    last_seq = int(self.headers.get("Last-Event-ID", "0") or "0")
+                except ValueError:
+                    last_seq = 0
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                try:
+                    for chunk in app.event_stream(last_seq=last_seq):
+                        self.wfile.write(chunk.encode("utf-8"))
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
         server = ThreadingHTTPServer((host, port), Handler)
         try:
@@ -488,6 +546,28 @@ INDEX_HTML = """<!doctype html>
       border-top: 1px solid var(--line);
       padding-top: 14px;
     }
+    .live-events {
+      display: grid;
+      gap: 8px;
+      max-height: 240px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .live-event {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      background: #fff;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .live-event strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+    }
+    .live-event.error, .live-event.cancelled { border-color: var(--bad); }
+    .live-event.done { border-color: var(--good); }
     pre {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
@@ -540,6 +620,11 @@ INDEX_HTML = """<!doctype html>
       <h2>Agent 状态</h2>
       <div class="summary" id="agentSummary"></div>
       <div class="detail">
+        <h2>Live Events</h2>
+        <div class="meta" id="liveStatus">connecting</div>
+        <div class="live-events" id="liveEvents"></div>
+      </div>
+      <div class="detail">
         <h2>可公开思路摘要</h2>
         <div class="summary" id="thoughtSummary"></div>
       </div>
@@ -555,6 +640,7 @@ INDEX_HTML = """<!doctype html>
   </main>
   <script>
     let selectedId = "";
+    const liveEvents = [];
     async function loadState() {
       const response = await fetch("/api/state", { cache: "no-store" });
       const state = await response.json();
@@ -637,6 +723,50 @@ INDEX_HTML = """<!doctype html>
           `changed: ${(artifacts.changed_files || []).join(", ") || "none"}`,
         ].join("\\n");
     }
+    function connectLiveEvents() {
+      const status = document.getElementById("liveStatus");
+      const source = new EventSource("/api/events");
+      const stages = ["context", "route", "llm", "tool", "verify", "done", "error", "cancelled", "heartbeat"];
+      source.onopen = () => {
+        status.textContent = "connected";
+      };
+      source.onerror = () => {
+        status.textContent = "reconnecting";
+      };
+      for (const stage of stages) {
+        source.addEventListener(stage, event => {
+          const payload = JSON.parse(event.data);
+          if (payload.stage !== "heartbeat") {
+            appendLiveEvent(payload);
+          }
+        });
+      }
+    }
+    function appendLiveEvent(event) {
+      liveEvents.unshift(event);
+      if (liveEvents.length > 20) {
+        liveEvents.pop();
+      }
+      renderLiveEvents();
+    }
+    function renderLiveEvents() {
+      const root = document.getElementById("liveEvents");
+      root.innerHTML = "";
+      if (!liveEvents.length) {
+        root.innerHTML = `<div class="muted">等待下一条 live event。</div>`;
+        return;
+      }
+      for (const event of liveEvents) {
+        const node = document.createElement("div");
+        node.className = `live-event ${escapeHtml(event.stage)}`;
+        const detail = event.detail ? `<div class="meta">${escapeHtml(event.detail)}</div>` : "";
+        node.innerHTML =
+          `<strong>${escapeHtml(event.stage)} · ${escapeHtml(event.message)}</strong>` +
+          `<div class="meta">${escapeHtml(event.turn_id || "no turn")} · #${escapeHtml(event.seq)}</div>` +
+          detail;
+        root.appendChild(node);
+      }
+    }
     function escapeHtml(value) {
       return text(value)
         .replaceAll("&", "&amp;")
@@ -645,6 +775,8 @@ INDEX_HTML = """<!doctype html>
         .replaceAll('"', "&quot;");
     }
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+    renderLiveEvents();
+    connectLiveEvents();
     loadState();
     setInterval(loadState, 1800);
   </script>

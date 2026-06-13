@@ -58,5 +58,35 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
 
     assert "Ming Trace Console" in html
     assert "/api/state" in html
+    assert "EventSource" in html
+    assert "/api/events" in html
+    assert "liveEvents" in html
     assert payload["agent"]["state"] == "idle"
     assert payload["timeline"][0]["kind"] == "empty"
+
+
+def test_trace_console_formats_sse_event(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+    event = {
+        "seq": 1,
+        "stage": "llm",
+        "message": "调用模型，第 1 轮",
+        "turn_id": "turn-1",
+    }
+
+    payload = app.format_sse(event)
+
+    assert payload.startswith("id: 1\n")
+    assert "event: llm\n" in payload
+    assert "data: " in payload
+    assert payload.endswith("\n\n")
+
+
+def test_trace_console_event_stream_reads_live_events(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+    app.live_events.append(stage="tool", message="执行工具 file_write", turn_id="turn-1")
+
+    chunk = next(app.event_stream(last_seq=0, poll_seconds=0, heartbeat_seconds=999))
+
+    assert "event: tool\n" in chunk
+    assert "执行工具 file_write" in chunk

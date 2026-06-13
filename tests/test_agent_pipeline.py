@@ -207,6 +207,8 @@ async def test_agent_emits_summary_progress_events(tmp_path, monkeypatch):
         "done",
     ]
     assert any(event.message == "执行工具 file_write" for event in events)
+    assert all(event.turn_id for event in events)
+    assert len({event.turn_id for event in events}) == 1
 
 
 @pytest.mark.asyncio

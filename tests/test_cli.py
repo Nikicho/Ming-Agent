@@ -3,6 +3,7 @@ import logging
 import pytest
 
 from ming import cli
+from ming.core.live_events import LiveEventStore
 
 
 def test_main_prints_help_without_entering_interactive(capsys):
@@ -74,3 +75,19 @@ def test_format_progress_event_defaults_to_summary():
     assert cli._format_progress_event(event, show_details=False) == "Ming: 执行工具 file_write"
     detailed = cli._format_progress_event(event, show_details=True)
     assert "scratch/demo.txt" in detailed
+
+
+def test_record_live_progress_writes_event(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+    event = cli.AgentProgressEvent(
+        stage="llm",
+        message="调用模型，第 1 轮",
+        detail="model=test",
+        turn_id="turn-1",
+    )
+
+    cli._record_live_progress(store, event)
+
+    saved = store.since(0)
+    assert saved[0]["stage"] == "llm"
+    assert saved[0]["turn_id"] == "turn-1"

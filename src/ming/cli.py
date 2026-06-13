@@ -29,6 +29,7 @@ class AgentProgressEvent:
     stage: str
     message: str
     detail: str = ""
+    turn_id: str = ""
 
 
 def _setup_logging(level: str = "INFO") -> None:
@@ -105,6 +106,21 @@ def _format_progress_event(event: AgentProgressEvent, show_details: bool = False
     return text
 
 
+def _record_live_progress(store, event: AgentProgressEvent) -> None:
+    event_type = {
+        "done": "final",
+        "error": "error",
+        "cancelled": "cancelled",
+    }.get(event.stage, "progress")
+    store.append(
+        stage=event.stage,
+        message=event.message,
+        turn_id=event.turn_id,
+        detail=event.detail,
+        event_type=event_type,
+    )
+
+
 def print_banner():
     console.print(
         Panel(
@@ -152,8 +168,15 @@ async def interactive_loop():
         sys.exit(1)
 
     detail_mode = False
+    from ming.core.live_events import LiveEventStore
+
+    live_store = LiveEventStore()
 
     def show_progress(event: AgentProgressEvent) -> None:
+        try:
+            _record_live_progress(live_store, event)
+        except Exception as exc:
+            logging.getLogger("ming").debug("Live progress write failed: %s", exc)
         console.print(f"[dim]{_format_progress_event(event, detail_mode)}[/dim]")
 
     agent = Agent(config, progress_callback=show_progress)

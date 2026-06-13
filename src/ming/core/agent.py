@@ -49,6 +49,7 @@ class AgentProgressEvent:
     stage: str
     message: str
     detail: str = ""
+    turn_id: str = ""
 
 SYSTEM_PROMPT = """\
 你是 Ming（明），一个增强人类 System 2 思维的 AI 助手。
@@ -117,6 +118,7 @@ class Agent:
         self.snapshots = FileSnapshotStore(self.workspace_root / ".ming" / "snapshots")
         self.last_trace_path: Path | None = None
         self.last_checkpoint_path: Path | None = None
+        self.current_turn_id = ""
         self.active_context_scopes = ["user", "project", "global"]
         self._last_t3_result = ""
 
@@ -135,8 +137,9 @@ class Agent:
     async def chat(self, user_input: str) -> str:
         """Process user input through the full pipeline."""
         logger.debug(f"User input: {user_input[:100]}...")
-        self._emit_progress("context", "准备上下文")
         trace = RunTrace(new_turn_id(), user_input)
+        self.current_turn_id = trace.turn_id
+        self._emit_progress("context", "准备上下文")
         todo = TodoState.from_user_input(user_input)
         notepad_path = self.notepad.create(trace.turn_id, user_input)
         self.notepad.add_assumption(notepad_path, "本轮只把高信号工作台信息注入上下文。")
@@ -246,6 +249,7 @@ class Agent:
                 )
             except asyncio.CancelledError:
                 msg = "[Ming: 已停止本轮思考]"
+                self._emit_progress("cancelled", "已停止本轮思考")
                 trace.add_observation("cancelled", "用户停止了当前 agent-loop。")
                 self.notepad.add_blocker(notepad_path, "用户停止了当前 agent-loop。")
                 self.context.add_message(Message(role="assistant", content=msg))
@@ -254,6 +258,7 @@ class Agent:
                 logger.error("LLM call failed", exc_info=True)
                 detail = f"{type(exc).__name__}: {exc}"
                 msg = f"[Ming: 模型调用失败，已停止本轮执行]\n{detail}"
+                self._emit_progress("error", "模型调用失败", detail=detail)
                 trace.add_observation("llm_error", detail)
                 self.notepad.add_blocker(notepad_path, f"llm_error: {detail}")
                 self.context.add_message(Message(role="assistant", content=msg))
@@ -463,7 +468,14 @@ class Agent:
         if not self.progress_callback:
             return
         try:
-            self.progress_callback(AgentProgressEvent(stage=stage, message=message, detail=detail))
+            self.progress_callback(
+                AgentProgressEvent(
+                    stage=stage,
+                    message=message,
+                    detail=detail,
+                    turn_id=self.current_turn_id,
+                )
+            )
         except Exception as exc:
             logger.debug("Progress callback failed: %s", exc)
 
