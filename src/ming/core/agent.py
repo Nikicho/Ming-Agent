@@ -134,10 +134,10 @@ class Agent:
         """Expose messages for CLI status/compatibility."""
         return self.context.get_messages()
 
-    async def chat(self, user_input: str) -> str:
+    async def chat(self, user_input: str, turn_id: str | None = None) -> str:
         """Process user input through the full pipeline."""
         logger.debug(f"User input: {user_input[:100]}...")
-        trace = RunTrace(new_turn_id(), user_input)
+        trace = RunTrace(turn_id or new_turn_id(), user_input)
         self.current_turn_id = trace.turn_id
         self._emit_progress("context", "准备上下文")
         todo = TodoState.from_user_input(user_input)

@@ -398,11 +398,13 @@ git commit -m "feat: show live agent events"
 
 ### Task 5: Add Chat Runtime With Cancellable Active Turn
 
+Status: completed in `src/ming/ui/chat_runtime.py`.
+
 **Files:**
 - Create: `src/ming/ui/chat_runtime.py`
 - Test: `tests/test_chat_runtime.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Test behaviors:
 - `submit("hello")` starts a background turn and returns `turn_id`.
@@ -411,7 +413,7 @@ Test behaviors:
 
 Use a fake async agent callable rather than real LLM.
 
-- [ ] **Step 2: Run test to verify RED**
+- [x] **Step 2: Run test to verify RED**
 
 Run:
 
@@ -421,7 +423,7 @@ Run:
 
 Expected: fail because module does not exist.
 
-- [ ] **Step 3: Implement runtime**
+- [x] **Step 3: Implement runtime**
 
 `ChatRuntime` responsibilities:
 - Own one `Agent` instance.
@@ -433,7 +435,7 @@ Expected: fail because module does not exist.
 
 Avoid global mutable state outside the server instance.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -443,7 +445,7 @@ Run:
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src/ming/ui/chat_runtime.py tests/test_chat_runtime.py
@@ -454,11 +456,13 @@ git commit -m "feat: add local chat runtime"
 
 ### Task 6: Add `/api/chat` and `/api/turns/current/stop`
 
+Status: completed in `src/ming/ui/trace_console.py`.
+
 **Files:**
 - Modify: `src/ming/ui/trace_console.py`
 - Test: `tests/test_trace_console.py`
 
-- [ ] **Step 1: Write failing handler tests at app method level**
+- [x] **Step 1: Write failing handler tests at app method level**
 
 Avoid brittle socket tests first. Add app-level methods:
 - `TraceConsoleApp.submit_chat(payload: dict) -> tuple[int, dict]`
@@ -469,7 +473,7 @@ Tests:
 - valid message returns 202 with `turn_id`.
 - stop returns 200.
 
-- [ ] **Step 2: Run test to verify RED**
+- [x] **Step 2: Run test to verify RED**
 
 Run:
 
@@ -479,7 +483,7 @@ Run:
 
 Expected: fail because methods do not exist.
 
-- [ ] **Step 3: Implement POST handling**
+- [x] **Step 3: Implement POST handling**
 
 Handler routes:
 - `POST /api/chat`
@@ -490,7 +494,7 @@ Handler routes:
 
 For now, one active turn per server.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -500,7 +504,7 @@ Run:
 
 Expected: pass.
 
-- [ ] **Step 5: Manual smoke**
+- [x] **Step 5: Manual smoke**
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8765/api/chat -H "Content-Type: application/json" -d "{\"message\":\"创建 scratch/sse_demo.txt，内容 hello\"}"
@@ -509,7 +513,7 @@ curl.exe -N http://127.0.0.1:8765/api/events
 
 Expected: POST returns quickly; SSE shows progress.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/ming/ui/trace_console.py tests/test_trace_console.py
@@ -522,11 +526,13 @@ git commit -m "feat: add web chat api"
 
 ### Task 7: Add Minimal Conversation UI To Current Page
 
+Status: completed in current stdlib HTML page. Smoke covered by HTTP checks; browser plugin screenshot verification was unavailable in this session.
+
 **Files:**
 - Modify: `src/ming/ui/trace_console.py`
 - Test: `tests/test_trace_console.py`
 
-- [ ] **Step 1: Write failing HTML assertions**
+- [x] **Step 1: Write failing HTML assertions**
 
 Add:
 
@@ -537,7 +543,7 @@ assert "stopTurnBtn" in html
 assert "conversation" in html
 ```
 
-- [ ] **Step 2: Run test to verify RED**
+- [x] **Step 2: Run test to verify RED**
 
 Run:
 
@@ -547,7 +553,7 @@ Run:
 
 Expected: fail.
 
-- [ ] **Step 3: Implement UI**
+- [x] **Step 3: Implement UI**
 
 Layout discipline from architecture doc:
 - Primary center: conversation flow.
@@ -561,7 +567,7 @@ Controls:
 - Stop button while running.
 - Live event list folded below assistant response.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -571,7 +577,7 @@ Run:
 
 Expected: pass.
 
-- [ ] **Step 5: Browser smoke**
+- [x] **Step 5: Browser smoke**
 
 Open:
 
@@ -587,7 +593,7 @@ Scenario:
 5. Run a second longer request and click Stop.
 6. Confirm cancelled event appears and UI becomes ready again.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/ming/ui/trace_console.py tests/test_trace_console.py

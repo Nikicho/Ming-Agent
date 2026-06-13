@@ -61,6 +61,10 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "EventSource" in html
     assert "/api/events" in html
     assert "liveEvents" in html
+    assert "chatForm" in html
+    assert "messageInput" in html
+    assert "stopTurnBtn" in html
+    assert "conversation" in html
     assert payload["agent"]["state"] == "idle"
     assert payload["timeline"][0]["kind"] == "empty"
 
@@ -90,3 +94,40 @@ def test_trace_console_event_stream_reads_live_events(tmp_path):
 
     assert "event: tool\n" in chunk
     assert "执行工具 file_write" in chunk
+
+def test_trace_console_submit_chat_validates_message(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+
+    status, payload = app.submit_chat({"message": "  "})
+
+    assert status == 400
+    assert payload["status"] == "invalid"
+
+
+def test_trace_console_submit_chat_returns_accepted_turn(tmp_path):
+    class FakeRuntime:
+        def submit(self, message):
+            self.message = message
+            return {"status": "running", "turn_id": "turn-1"}
+
+    runtime = FakeRuntime()
+    app = TraceConsoleApp(tmp_path, chat_runtime=runtime)
+
+    status, payload = app.submit_chat({"message": "hello"})
+
+    assert status == 202
+    assert payload == {"status": "running", "turn_id": "turn-1"}
+    assert runtime.message == "hello"
+
+
+def test_trace_console_stop_current_turn_maps_runtime_status(tmp_path):
+    class FakeRuntime:
+        def stop(self):
+            return {"status": "cancelled", "turn_id": "turn-1"}
+
+    app = TraceConsoleApp(tmp_path, chat_runtime=FakeRuntime())
+
+    status, payload = app.stop_current_turn()
+
+    assert status == 200
+    assert payload == {"status": "cancelled", "turn_id": "turn-1"}

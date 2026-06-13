@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ming.core.live_events import LiveEventStore
+from ming.ui.chat_runtime import ChatRuntime
 
 
 class TraceConsoleState:
@@ -262,10 +263,11 @@ class TraceConsoleState:
 class TraceConsoleApp:
     """Tiny stdlib HTTP app for the Trace Console."""
 
-    def __init__(self, workspace_root: str | Path | None = None):
+    def __init__(self, workspace_root: str | Path | None = None, chat_runtime: Any | None = None):
         self.workspace_root = Path(workspace_root or Path.cwd())
         self.state_builder = TraceConsoleState(self.workspace_root)
         self.live_events = LiveEventStore(self.workspace_root / ".ming" / "live")
+        self._chat_runtime = chat_runtime
 
     def state(self) -> dict[str, Any]:
         return self.state_builder.load()
@@ -275,6 +277,28 @@ class TraceConsoleApp:
 
     def render_index(self) -> str:
         return INDEX_HTML
+
+    def chat_runtime(self):
+        if self._chat_runtime is None:
+            self._chat_runtime = ChatRuntime(self.workspace_root, live_events=self.live_events)
+        return self._chat_runtime
+
+    def submit_chat(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return 400, {"status": "invalid", "error": "message is required"}
+        result = self.chat_runtime().submit(message)
+        if result.get("status") == "busy":
+            return 409, result
+        if result.get("status") == "invalid":
+            return 400, result
+        return 202, result
+
+    def stop_current_turn(self) -> tuple[int, dict[str, Any]]:
+        result = self.chat_runtime().stop()
+        if result.get("status") == "idle":
+            return 409, result
+        return 200, result
 
     def format_sse(self, event: dict[str, Any]) -> str:
         event_name = str(event.get("stage") or event.get("type") or "message")
@@ -327,6 +351,18 @@ class TraceConsoleApp:
                     return
                 self._send(404, "Not found", "text/plain; charset=utf-8")
 
+            def do_POST(self) -> None:
+                path = urlparse(self.path).path
+                if path == "/api/chat":
+                    status, payload = app.submit_chat(self._read_json_body())
+                    self._send_json(status, payload)
+                    return
+                if path == "/api/turns/current/stop":
+                    status, payload = app.stop_current_turn()
+                    self._send_json(status, payload)
+                    return
+                self._send(404, "Not found", "text/plain; charset=utf-8")
+
             def log_message(self, format: str, *args: Any) -> None:
                 return
 
@@ -338,6 +374,27 @@ class TraceConsoleApp:
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(payload)
+
+            def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+                self._send(
+                    status,
+                    json.dumps(payload, ensure_ascii=False),
+                    "application/json; charset=utf-8",
+                )
+
+            def _read_json_body(self) -> dict[str, Any]:
+                try:
+                    length = int(self.headers.get("Content-Length", "0") or "0")
+                except ValueError:
+                    length = 0
+                if length <= 0:
+                    return {}
+                try:
+                    raw = self.rfile.read(length).decode("utf-8")
+                    payload = json.loads(raw)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    return {}
+                return payload if isinstance(payload, dict) else {}
 
             def _send_sse(self) -> None:
                 try:
@@ -487,6 +544,53 @@ INDEX_HTML = """<!doctype html>
     }
     .check.completed { background: var(--good); border-color: var(--good); }
     .check.in_progress { background: var(--accent); border-color: var(--accent); }
+    .conversation {
+      display: grid;
+      gap: 10px;
+      min-height: 220px;
+      max-height: 42vh;
+      overflow: auto;
+      padding-right: 4px;
+      margin-bottom: 14px;
+    }
+    .message {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+      line-height: 1.55;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+    .message.user { border-color: #99f6e4; background: #f0fdfa; }
+    .message.assistant { border-color: #bfdbfe; background: #eff6ff; }
+    .message.system, .message.event { color: var(--muted); font-size: 12px; }
+    .chat-form {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+      line-height: 1.5;
+    }
+    .chat-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+    }
     .timeline {
       display: grid;
       gap: 10px;
@@ -613,8 +717,20 @@ INDEX_HTML = """<!doctype html>
       </div>
     </aside>
     <section>
-      <h2>Agent Loop</h2>
-      <div class="timeline" id="timeline"></div>
+      <h2>Conversation</h2>
+      <div class="conversation" id="conversation"></div>
+      <form class="chat-form" id="chatForm">
+        <textarea id="messageInput" name="message" placeholder="输入任务，Ming 会在本地运行。"></textarea>
+        <div class="chat-actions">
+          <span class="meta" id="chatStatus">ready</span>
+          <button class="primary" id="sendBtn" type="submit">Send</button>
+          <button id="stopTurnBtn" type="button" disabled>Stop</button>
+        </div>
+      </form>
+      <div class="detail">
+        <h2>Agent Loop</h2>
+        <div class="timeline" id="timeline"></div>
+      </div>
     </section>
     <aside>
       <h2>Agent 状态</h2>
@@ -641,6 +757,7 @@ INDEX_HTML = """<!doctype html>
   <script>
     let selectedId = "";
     const liveEvents = [];
+    const conversation = [];
     async function loadState() {
       const response = await fetch("/api/state", { cache: "no-store" });
       const state = await response.json();
@@ -723,10 +840,93 @@ INDEX_HTML = """<!doctype html>
           `changed: ${(artifacts.changed_files || []).join(", ") || "none"}`,
         ].join("\\n");
     }
+    async function submitChat(event) {
+      event.preventDefault();
+      const input = document.getElementById("messageInput");
+      const message = input.value.trim();
+      if (!message) {
+        return;
+      }
+      appendConversation("user", message);
+      setChatRunning(true, "submitting");
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const payload = await response.json();
+      if (response.status === 202) {
+        input.value = "";
+        setChatRunning(true, `running ${payload.turn_id}`);
+        appendConversation("event", `turn ${payload.turn_id} started`);
+      } else {
+        setChatRunning(false, payload.status || "error");
+        appendConversation("system", payload.error || payload.status || "submit failed");
+      }
+    }
+    async function stopTurn() {
+      setChatRunning(true, "stopping");
+      const response = await fetch("/api/turns/current/stop", { method: "POST" });
+      const payload = await response.json();
+      if (response.status === 200) {
+        appendConversation("system", "已停止本轮思考");
+      }
+      setChatRunning(false, payload.status || "idle");
+    }
+    function setChatRunning(running, label) {
+      document.getElementById("chatStatus").textContent = label;
+      document.getElementById("sendBtn").disabled = running;
+      document.getElementById("stopTurnBtn").disabled = !running;
+    }
+    function appendConversation(role, content) {
+      conversation.push({ role, content });
+      if (conversation.length > 80) {
+        conversation.shift();
+      }
+      renderConversation();
+    }
+    function renderConversation() {
+      const root = document.getElementById("conversation");
+      root.innerHTML = "";
+      if (!conversation.length) {
+        root.innerHTML = `<div class="message system">等待输入任务。</div>`;
+        return;
+      }
+      for (const item of conversation) {
+        const node = document.createElement("div");
+        node.className = `message ${escapeHtml(item.role)}`;
+        node.textContent = item.content;
+        root.appendChild(node);
+      }
+      root.scrollTop = root.scrollHeight;
+    }
+    function handleConversationEvent(event) {
+      if (event.stage === "submitted") {
+        appendConversation("event", event.message);
+        return;
+      }
+      if (event.stage === "final") {
+        appendConversation("assistant", event.detail || event.message);
+        setChatRunning(false, "ready");
+        loadState();
+        return;
+      }
+      if (event.stage === "error") {
+        appendConversation("system", event.detail || event.message);
+        setChatRunning(false, "error");
+        loadState();
+        return;
+      }
+      if (event.stage === "cancelled") {
+        appendConversation("system", event.message);
+        setChatRunning(false, "cancelled");
+        loadState();
+      }
+    }
     function connectLiveEvents() {
       const status = document.getElementById("liveStatus");
       const source = new EventSource("/api/events");
-      const stages = ["context", "route", "llm", "tool", "verify", "done", "error", "cancelled", "heartbeat"];
+      const stages = ["submitted", "context", "route", "llm", "tool", "verify", "done", "final", "error", "cancelled", "heartbeat"];
       source.onopen = () => {
         status.textContent = "connected";
       };
@@ -738,6 +938,7 @@ INDEX_HTML = """<!doctype html>
           const payload = JSON.parse(event.data);
           if (payload.stage !== "heartbeat") {
             appendLiveEvent(payload);
+            handleConversationEvent(payload);
           }
         });
       }
@@ -775,6 +976,9 @@ INDEX_HTML = """<!doctype html>
         .replaceAll('"', "&quot;");
     }
     document.getElementById("refreshBtn").addEventListener("click", loadState);
+    document.getElementById("chatForm").addEventListener("submit", submitChat);
+    document.getElementById("stopTurnBtn").addEventListener("click", stopTurn);
+    renderConversation();
     renderLiveEvents();
     connectLiveEvents();
     loadState();

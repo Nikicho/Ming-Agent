@@ -212,6 +212,28 @@ async def test_agent_emits_summary_progress_events(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_accepts_external_turn_id_for_web_runtime(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=5),
+    )
+    events: list[AgentProgressEvent] = []
+
+    async def fake_llm(messages, config, tools=None):
+        return LLMResponse(content="FINAL: ok", finish_reason="stop")
+
+    monkeypatch.setattr("ming.core.agent.call_llm", fake_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path), progress_callback=events.append)
+    result = await agent.chat("hello", turn_id="turn-web-1")
+
+    assert result == "ok"
+    assert {event.turn_id for event in events} == {"turn-web-1"}
+    assert (tmp_path / ".ming" / "traces" / "turn-web-1.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_agent_returns_graceful_message_and_trace_on_llm_failure(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = MingConfig(
