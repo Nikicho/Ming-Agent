@@ -5,7 +5,8 @@ import pytest
 from ming.config import AgentConfig, LLMConfig, MingConfig
 from ming.core.agent import Agent
 from ming.core.llm import LLMResponse, Message
-from ming.core.recovery import ErrorClassifier
+from ming.core.progress import ProgressAssessment, ToolEvent
+from ming.core.recovery import ErrorClassifier, format_llm_failure, format_tool_stall
 from ming.core.trace import CheckpointStore, RunTrace
 from ming.memory.store import MemoryStore
 from ming.skills.index import SkillIndex, ToolNeedProposal
@@ -18,6 +19,47 @@ def test_error_classifier_marks_retryable_and_irrecoverable_errors():
     assert classifier.classify("TimeoutError: request timed out").retryable is True
     assert classifier.classify("[Permission denied] reset hard").recoverable is False
     assert classifier.classify("old_string not found in file.").category == "tool_input"
+
+
+def test_llm_timeout_failure_is_user_facing_with_hidden_technical_detail():
+    class TimeoutLikeError(Exception):
+        pass
+
+    exc = TimeoutLikeError(
+        "litellm.Timeout: Timeout Error: DeepseekException - "
+        "Connection timed out. Timeout passed=600.0, time taken=600.308 seconds"
+    )
+
+    failure = format_llm_failure(exc)
+
+    assert "模型服务 10 分钟没有响应" in failure.user_message
+    assert "已保留当前进度" in failure.user_message
+    assert "DeepseekException" not in failure.user_message
+    assert "litellm.Timeout" in failure.technical_detail
+    assert failure.category == "timeout"
+    assert failure.retryable is True
+
+
+def test_tool_stall_failure_explains_why_agent_paused():
+    assessment = ProgressAssessment(
+        decision="stop",
+        reason="连续 3 次工具调用没有产生有效新证据，停止继续尝试同类策略。",
+    )
+    events = [
+        ToolEvent("bash", "bash", "ok", 1, 0, "no_signal"),
+        ToolEvent("bash", "bash", "ok", 1, 0, "no_signal"),
+        ToolEvent("file_read", "file_read", "error", 0, 0, "no_signal"),
+    ]
+
+    failure = format_tool_stall(assessment, events)
+
+    assert "我暂停了本轮执行" in failure.user_message
+    assert "连续 3 次工具调用没有拿到可用的新信息" in failure.user_message
+    assert "bash" in failure.user_message
+    assert "换一种工具" in failure.user_message
+    assert "no_signal" not in failure.user_message
+    assert "no_signal" in failure.technical_detail
+    assert failure.category == "tool_stall"
 
 
 @pytest.mark.asyncio

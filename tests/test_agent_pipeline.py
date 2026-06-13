@@ -155,7 +155,9 @@ async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeyp
     agent = Agent(config=config, working_dir=str(tmp_path))
     result = await agent.chat("搜一下不存在的资料")
 
-    assert "工具循环已停止" in result
+    assert "我暂停了本轮执行" in result
+    assert "连续 3 次工具调用没有拿到可用的新信息" in result
+    assert "no_signal" not in result
     assert calls == 3
 
 
@@ -250,12 +252,14 @@ async def test_agent_returns_graceful_message_and_trace_on_llm_failure(tmp_path,
     result = await agent.chat("帮我写一个番茄钟页面")
 
     assert "模型调用失败" in result
-    assert "provider disconnected" in result
+    assert "provider disconnected" not in result
     trace_files = list((tmp_path / ".ming" / "traces").glob("*.json"))
     checkpoint_files = list((tmp_path / ".ming" / "checkpoints").glob("*/checkpoint.json"))
     assert trace_files
     assert checkpoint_files
-    assert "llm_error" in trace_files[0].read_text(encoding="utf-8")
+    trace_text = trace_files[0].read_text(encoding="utf-8")
+    assert "llm_error" in trace_text
+    assert "provider disconnected" in trace_text
 
 
 @pytest.mark.asyncio

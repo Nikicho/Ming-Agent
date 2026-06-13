@@ -28,7 +28,7 @@ from ming.core.loop_detection import LoopDetector
 from ming.core.notepad import NotepadStore
 from ming.core.permission import PermissionGate
 from ming.core.progress import ProgressTracker, ToolEvent
-from ming.core.recovery import FileSnapshotStore
+from ming.core.recovery import FileSnapshotStore, format_llm_failure, format_tool_stall
 from ming.core.todo import TodoState
 from ming.core.tool_selection import ToolSelector
 from ming.core.trace import CheckpointStore, RunTrace, new_turn_id
@@ -256,11 +256,11 @@ class Agent:
                 return self._finish_turn(msg, trace, todo, notepad_path, complete_todo=False)
             except Exception as exc:
                 logger.error("LLM call failed", exc_info=True)
-                detail = f"{type(exc).__name__}: {exc}"
-                msg = f"[Ming: 模型调用失败，已停止本轮执行]\n{detail}"
-                self._emit_progress("error", "模型调用失败", detail=detail)
-                trace.add_observation("llm_error", detail)
-                self.notepad.add_blocker(notepad_path, f"llm_error: {detail}")
+                failure = format_llm_failure(exc)
+                msg = failure.user_message
+                self._emit_progress("error", "模型调用失败", detail=failure.user_message)
+                trace.add_observation("llm_error", failure.technical_detail)
+                self.notepad.add_blocker(notepad_path, f"llm_error: {failure.technical_detail}")
                 self.context.add_message(Message(role="assistant", content=msg))
                 return self._finish_turn(msg, trace, todo, notepad_path, complete_todo=False)
 
@@ -346,10 +346,12 @@ class Agent:
                     ))
 
                     if assessment.decision == "stop":
-                        msg = (
-                            "[Ming: 工具循环已停止]\n"
-                            f"{assessment.reason}\n"
-                            "请换用更可靠的工具、缩小目标，或让用户提供来源。"
+                        failure = format_tool_stall(assessment, self.progress_tracker.events)
+                        msg = failure.user_message
+                        trace.add_observation("tool_stall", failure.technical_detail)
+                        self.notepad.add_blocker(
+                            notepad_path,
+                            f"tool_stall: {failure.technical_detail}",
                         )
                         self.context.add_message(Message(role="assistant", content=msg))
                         return self._finish_turn(msg, trace, todo, notepad_path)

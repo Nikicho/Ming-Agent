@@ -1,9 +1,11 @@
-"""Local recovery helpers for file tool changes."""
+"""Local recovery helpers for file tool changes and user-facing failures."""
 
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+
+from ming.core.progress import ProgressAssessment, ToolEvent
 
 
 @dataclass
@@ -22,6 +24,17 @@ class ErrorAssessment:
     summary: str
 
 
+@dataclass(frozen=True)
+class FailureMessage:
+    """Split user-facing recovery guidance from raw diagnostics."""
+
+    category: str
+    user_message: str
+    technical_detail: str
+    retryable: bool
+    recoverable: bool
+
+
 class ErrorClassifier:
     """Classify tool/provider errors for retry and handoff decisions."""
 
@@ -37,6 +50,101 @@ class ErrorClassifier:
         if any(token in lowered for token in ["model", "provider", "api"]):
             return ErrorAssessment("provider", retryable=True, recoverable=True, summary=text)
         return ErrorAssessment("unknown", retryable=False, recoverable=True, summary=text)
+
+
+def format_llm_failure(exc: Exception) -> FailureMessage:
+    """Create a useful failure message without exposing provider internals by default."""
+    technical_detail = f"{type(exc).__name__}: {exc}"
+    lowered = technical_detail.lower()
+    is_timeout = any(token in lowered for token in ["timeout", "timed out", "connection timed out"])
+    seconds = _extract_timeout_seconds(technical_detail)
+    if is_timeout:
+        wait_text = _format_wait_time(seconds)
+        user_message = (
+            f"[Ming: 模型服务 {wait_text}没有响应]\n"
+            "我已停止本轮执行，并已保留当前进度、trace、checkpoint 和已经写入的文件。\n"
+            "可以直接重试；如果连续出现，建议切换模型、缩小任务范围，或从已生成的文件继续检查。"
+        )
+        return FailureMessage(
+            category="timeout",
+            user_message=user_message,
+            technical_detail=technical_detail,
+            retryable=True,
+            recoverable=True,
+        )
+
+    user_message = (
+        "[Ming: 模型调用失败，已停止本轮执行]\n"
+        "我已保留当前进度、trace、checkpoint 和已经写入的文件。\n"
+        "可以重试本轮任务；如果反复失败，建议切换模型或缩小任务范围。"
+    )
+    assessment = ErrorClassifier().classify(technical_detail)
+    return FailureMessage(
+        category=assessment.category,
+        user_message=user_message,
+        technical_detail=technical_detail,
+        retryable=assessment.retryable,
+        recoverable=assessment.recoverable,
+    )
+
+
+def format_tool_stall(
+    assessment: ProgressAssessment,
+    events: list[ToolEvent],
+) -> FailureMessage:
+    """Explain a no-progress tool stall in product language."""
+    recent_events = events[-3:]
+    tool_names = _join_unique(event.tool_name for event in recent_events) or "工具"
+    user_message = (
+        "[Ming: 我暂停了本轮执行]\n"
+        "连续 3 次工具调用没有拿到可用的新信息，所以我先停下来，避免继续空转。\n"
+        f"刚才主要尝试了：{tool_names}。\n"
+        "建议：换一种工具、缩小目标，或补充文件、链接、运行方式后继续。"
+    )
+    technical_detail = json.dumps(
+        {
+            "assessment": asdict(assessment),
+            "recent_events": [asdict(event) for event in recent_events],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    return FailureMessage(
+        category="tool_stall",
+        user_message=user_message,
+        technical_detail=technical_detail,
+        retryable=False,
+        recoverable=True,
+    )
+
+
+def _extract_timeout_seconds(text: str) -> float | None:
+    marker = "Timeout passed="
+    if marker not in text:
+        return None
+    suffix = text.split(marker, 1)[1]
+    number = suffix.split(",", 1)[0].strip()
+    try:
+        return float(number)
+    except ValueError:
+        return None
+
+
+def _format_wait_time(seconds: float | None) -> str:
+    if seconds is None:
+        return "长时间"
+    minutes = round(seconds / 60)
+    if minutes >= 1 and abs(seconds - minutes * 60) < 5:
+        return f"{minutes} 分钟"
+    return f"{seconds:.0f} 秒"
+
+
+def _join_unique(values) -> str:
+    unique: list[str] = []
+    for value in values:
+        if value and value not in unique:
+            unique.append(value)
+    return "、".join(unique)
 
 
 class FileSnapshotStore:

@@ -305,6 +305,12 @@ class TraceConsoleApp:
         data = json.dumps(event, ensure_ascii=False)
         return f"id: {event.get('seq', 0)}\nevent: {event_name}\ndata: {data}\n\n"
 
+    def default_event_start_seq(self) -> int:
+        events = self.live_events.since(0)
+        if not events:
+            return 0
+        return max(int(event.get("seq", 0)) for event in events)
+
     def event_stream(
         self,
         last_seq: int = 0,
@@ -397,10 +403,14 @@ class TraceConsoleApp:
                 return payload if isinstance(payload, dict) else {}
 
             def _send_sse(self) -> None:
-                try:
-                    last_seq = int(self.headers.get("Last-Event-ID", "0") or "0")
-                except ValueError:
-                    last_seq = 0
+                last_event_id = self.headers.get("Last-Event-ID")
+                if last_event_id is None:
+                    last_seq = app.default_event_start_seq()
+                else:
+                    try:
+                        last_seq = int(last_event_id or "0")
+                    except ValueError:
+                        last_seq = 0
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
@@ -428,7 +438,7 @@ INDEX_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ming Trace Console</title>
+  <title>Ming 任务工作台</title>
   <style>
     :root {
       color-scheme: light;
@@ -494,7 +504,7 @@ INDEX_HTML = """<!doctype html>
     .dot.blocked { background: var(--bad); }
     main {
       display: grid;
-      grid-template-columns: minmax(220px, 300px) minmax(360px, 1fr) minmax(260px, 340px);
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
       gap: 18px;
       padding: 18px;
       max-width: 1500px;
@@ -507,6 +517,28 @@ INDEX_HTML = """<!doctype html>
       box-shadow: var(--shadow);
       padding: 16px;
       min-width: 0;
+    }
+    .overview-panel {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(280px, 1.4fr) minmax(220px, .8fr) minmax(260px, 1fr);
+      gap: 16px;
+    }
+    .overview-panel .task,
+    .overview-panel .detail {
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+    .workbench {
+      min-height: calc(100vh - 190px);
+    }
+    .diagnostics-panel {
+      align-self: start;
+      position: sticky;
+      top: 90px;
+      max-height: calc(100vh - 110px);
+      overflow: auto;
     }
     .task {
       display: grid;
@@ -594,7 +626,7 @@ INDEX_HTML = """<!doctype html>
     .timeline {
       display: grid;
       gap: 10px;
-      max-height: calc(100vh - 128px);
+      max-height: 48vh;
       overflow: auto;
       padding-right: 4px;
     }
@@ -686,6 +718,8 @@ INDEX_HTML = """<!doctype html>
     @media (max-width: 1060px) {
       header { height: auto; padding: 14px 16px; align-items: flex-start; gap: 12px; }
       main { grid-template-columns: 1fr; padding: 12px; }
+      .overview-panel { grid-column: auto; grid-template-columns: 1fr; }
+      .diagnostics-panel { position: static; max-height: none; }
       .timeline { max-height: none; }
     }
   </style>
@@ -693,7 +727,7 @@ INDEX_HTML = """<!doctype html>
 <body>
   <header>
     <div>
-      <h1>Ming Trace Console</h1>
+      <h1>Ming 任务工作台</h1>
       <div class="meta" id="workspace"></div>
     </div>
     <div class="status">
@@ -703,7 +737,7 @@ INDEX_HTML = """<!doctype html>
     </div>
   </header>
   <main>
-    <aside>
+    <aside class="overview-panel">
       <div class="task">
         <h2>当前任务</h2>
         <div class="text" id="taskText"></div>
@@ -716,8 +750,8 @@ INDEX_HTML = """<!doctype html>
         <div class="meta" id="artifacts"></div>
       </div>
     </aside>
-    <section>
-      <h2>Conversation</h2>
+    <section class="workbench">
+      <h2>对话</h2>
       <div class="conversation" id="conversation"></div>
       <form class="chat-form" id="chatForm">
         <textarea id="messageInput" name="message" placeholder="输入任务，Ming 会在本地运行。"></textarea>
@@ -728,11 +762,11 @@ INDEX_HTML = """<!doctype html>
         </div>
       </form>
       <div class="detail">
-        <h2>Agent Loop</h2>
-        <div class="timeline" id="timeline"></div>
+        <h2>执行过程</h2>
+        <div class="timeline" id="runTimeline"></div>
       </div>
     </section>
-    <aside>
+    <aside class="diagnostics-panel">
       <h2>Agent 状态</h2>
       <div class="summary" id="agentSummary"></div>
       <div class="detail">
@@ -758,6 +792,30 @@ INDEX_HTML = """<!doctype html>
     let selectedId = "";
     const liveEvents = [];
     const conversation = [];
+    const liveRunEvents = [];
+    let stateTimeline = [];
+    function normalizeStaticLabels() {
+      const labels = [
+        "当前任务",
+        "TODO",
+        "运行产物",
+        "对话",
+        "执行过程",
+        "Agent 状态",
+        "SSE 实时事件",
+        "思考摘要",
+        "Subagents",
+        "诊断详情",
+      ];
+      document.querySelectorAll("h2").forEach((heading, index) => {
+        if (labels[index]) {
+          heading.textContent = labels[index];
+        }
+      });
+      document.getElementById("refreshBtn").textContent = "刷新";
+      document.getElementById("messageInput").placeholder = "输入任务，Ming 会在本地运行。";
+      document.getElementById("details").textContent = "点击执行过程中的步骤，查看结构化详情。";
+    }
     async function loadState() {
       const response = await fetch("/api/state", { cache: "no-store" });
       const state = await response.json();
@@ -778,7 +836,8 @@ INDEX_HTML = """<!doctype html>
       document.getElementById("agentSummary").textContent = state.agent.summary;
       document.getElementById("thoughtSummary").textContent = state.agent.thought_summary;
       renderTodo(state.todo.items || []);
-      renderTimeline(state.timeline || []);
+      stateTimeline = state.timeline || [];
+      renderRunTimeline();
       renderSubagents(state.subagents || []);
       renderArtifacts(state.artifacts || {});
     }
@@ -798,8 +857,9 @@ INDEX_HTML = """<!doctype html>
         root.appendChild(row);
       }
     }
-    function renderTimeline(cards) {
-      const root = document.getElementById("timeline");
+    function renderRunTimeline(cards) {
+      const root = document.getElementById("runTimeline");
+      cards = cards || (liveRunEvents.length ? liveRunEvents : stateTimeline);
       root.innerHTML = "";
       for (const card of cards) {
         const node = document.createElement("article");
@@ -812,7 +872,7 @@ INDEX_HTML = """<!doctype html>
           selectedId = card.id;
           document.getElementById("details").textContent =
             JSON.stringify(card.details || {}, null, 2);
-          renderTimeline(cards);
+          renderRunTimeline(cards);
         });
         root.appendChild(node);
       }
@@ -900,9 +960,43 @@ INDEX_HTML = """<!doctype html>
       }
       root.scrollTop = root.scrollHeight;
     }
+    function formatRunEvent(event) {
+      const labels = {
+        submitted: "收到任务",
+        context: "整理上下文",
+        route: "选择策略",
+        llm: "模型思考",
+        tool: "工具执行",
+        verify: "核验结果",
+        done: "保存进度",
+        final: "最终回复",
+        error: "遇到问题",
+        cancelled: "已停止",
+      };
+      const stage = event.stage || event.type || "event";
+      return {
+        id: `live-${event.seq || Date.now()}-${stage}`,
+        kind: stage,
+        title: labels[stage] || stage,
+        status: stage === "error" ? "needs_attention" : stage === "final" ? "done" : "running",
+        summary: event.message || event.detail || "",
+        details: event,
+      };
+    }
+    function appendRunEvent(event) {
+      const card = formatRunEvent(event);
+      if (!liveRunEvents.some(item => item.id === card.id)) {
+        liveRunEvents.push(card);
+      }
+      if (liveRunEvents.length > 80) {
+        liveRunEvents.shift();
+      }
+      renderRunTimeline();
+    }
     function handleConversationEvent(event) {
+      appendRunEvent(event);
       if (event.stage === "submitted") {
-        appendConversation("event", event.message);
+        appendConversation("event", `收到任务：${event.message}`);
         return;
       }
       if (event.stage === "final") {
@@ -921,6 +1015,14 @@ INDEX_HTML = """<!doctype html>
         appendConversation("system", event.message);
         setChatRunning(false, "cancelled");
         loadState();
+        return;
+      }
+      if (["context", "route", "llm", "tool", "verify", "done"].includes(event.stage)) {
+        const card = formatRunEvent(event);
+        appendConversation("event", `${card.title}：${event.message}`);
+        if (event.stage === "done") {
+          loadState();
+        }
       }
     }
     function connectLiveEvents() {
@@ -978,6 +1080,7 @@ INDEX_HTML = """<!doctype html>
     document.getElementById("refreshBtn").addEventListener("click", loadState);
     document.getElementById("chatForm").addEventListener("submit", submitChat);
     document.getElementById("stopTurnBtn").addEventListener("click", stopTurn);
+    normalizeStaticLabels();
     renderConversation();
     renderLiveEvents();
     connectLiveEvents();

@@ -56,7 +56,7 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     html = app.render_index()
     payload = json.loads(app.state_json())
 
-    assert "Ming Trace Console" in html
+    assert "Ming 任务工作台" in html
     assert "/api/state" in html
     assert "EventSource" in html
     assert "/api/events" in html
@@ -65,6 +65,14 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "messageInput" in html
     assert "stopTurnBtn" in html
     assert "conversation" in html
+    assert "任务工作台" in html
+    assert "执行过程" in html
+    assert "诊断详情" in html
+    assert "runTimeline" in html
+    assert "formatRunEvent" in html
+    assert "renderRunTimeline" in html
+    assert "模型思考" in html
+    assert "工具执行" in html
     assert payload["agent"]["state"] == "idle"
     assert payload["timeline"][0]["kind"] == "empty"
 
@@ -106,6 +114,14 @@ def test_trace_console_event_stream_resumes_after_last_seq(tmp_path):
     assert f"id: {second['seq']}\n" in chunk
     assert "event: tool\n" in chunk
     assert "prepare" not in chunk
+
+
+def test_trace_console_default_stream_start_skips_existing_history(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+    app.live_events.append(stage="submitted", message="old", turn_id="turn-1")
+    latest = app.live_events.append(stage="done", message="old done", turn_id="turn-1")
+
+    assert app.default_event_start_seq() == latest["seq"]
 
 
 def test_trace_console_submit_chat_validates_message(tmp_path):

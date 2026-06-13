@@ -121,15 +121,15 @@ Dream 当前是非破坏性的离线整理器：读取 `.ming/traces/`、`.ming/
 CLI 默认展示高信号进度，例如“准备上下文”“调用模型”“执行工具 file_write”“执行 T3 核验”。底层 LiteLLM、httpx、asyncio 等 provider 日志默认不刷屏；需要看详细内部日志时使用 `/debug`，需要展开每步参数时使用 `/details`，完整记录仍可通过 `/trace` 查看。
 如果模型调用失败或用户按 `Ctrl+C` 停止当前轮，Ming 会优雅收口并落盘失败/停止 trace，而不是把 Python traceback 刷到用户界面。
 
-### Trace Console
+### Ming 任务工作台
 
-`python -m ming ui` 会启动一个本地 Web UI，默认监听 `127.0.0.1:8765`。页面可以直接输入任务并通过 `/api/chat` 发起一轮 Ming 执行，也可以用 Stop 按钮调用 `/api/turns/current/stop` 停止当前轮。它同时把 `.ming/traces/` 和 `.ming/checkpoints/` 里的最近一轮运行记录整理成三个视图：
+`python -m ming ui` 会启动一个本地 Web UI，默认监听 `127.0.0.1:8765`。页面可以直接输入任务并通过 `/api/chat` 发起一轮 Ming 执行，也可以用 Stop 按钮调用 `/api/turns/current/stop` 停止当前轮。它把 `.ming/traces/`、`.ming/checkpoints/` 和 `.ming/live/events.jsonl` 整理成更接近产品体验的任务工作台：
 
-- 左侧：当前任务、TODO、trace/checkpoint/notepad/changed files。
-- 中间：conversation-first 对话区、输入框、Stop 按钮，以及 Agent Loop 时间线，包括用户任务、工具事件、observation、assessment 和最终回复。
-- 右侧：agent 状态、可公开思路摘要、Alpha/Beta/Gamma subagent 槽位和点击步骤后的结构化详情。
+- 顶部总览：当前任务、TODO、trace/checkpoint/notepad/changed files。
+- 主工作台：对话区、输入框、Stop 按钮，以及“执行过程”时间线。SSE 事件会被映射成“收到任务、整理上下文、选择策略、模型思考、工具执行、核验结果、保存进度、最终回复”等步骤卡。
+- 诊断侧栏：agent 状态、SSE 实时事件、可公开思考摘要、subagent 槽位和点击步骤后的结构化详情。
 
-当前版本会展示“最近一次已落盘回合”，同时通过 `/api/events` 提供 SSE live event 流。CLI 和 Web UI 运行时都会把 `submitted`、`context`、`llm`、`tool`、`verify`、`done`、`final`、`error`、`cancelled` 等高信号进度写入 `.ming/live/events.jsonl`，Trace Console 右侧会实时显示最近 20 条事件。当前还没有 provider token 级流式输出，也还不是 React/Tauri 版本；Web UI 已能发起和停止本地单轮任务。
+新打开的页面默认只接收打开之后的 live event，不会把历史 `events.jsonl` 重新灌进对话区；历史运行记录仍通过最近 trace/checkpoint 的执行过程和诊断详情查看。当前还没有 provider token 级逐字流式输出，也还不是 React/Tauri 版本；Web UI 已能发起、停止本地单轮任务，并展示 agent-loop 级别的 SSE 过程。
 
 SSE 排障：
 - 页面还是旧 Trace Console：确认 `python -m ming ui --port 8765` 加载的是当前 `D:\Ming` 源码；必要时在项目根目录执行 `python -m pip install -e .`，然后重启服务并 `Ctrl+F5` 强刷浏览器。
@@ -173,7 +173,7 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 - `artifact_noise`：产生大量内容但没有结构化证据。
 - `unknown`：有输出但还无法判断。
 
-连续多次 `no_signal/artifact_noise` 会停止本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略循环。
+连续多次 `no_signal/artifact_noise` 会暂停本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略空转。用户界面会显示“为什么暂停、刚才主要尝试了哪些工具、下一步如何继续”；原始 `no_signal` 诊断保留在 trace/notepad 详情中。
 
 这些事件会保存到 `.ming/traces/<turn_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
 Trace 还会记录 observations 和 assessments；交互模式用 `/expand <event_id>` 可以展开最近 trace 的某个事件。
@@ -202,7 +202,7 @@ Ming 在执行 `file_write` / `file_edit` 前会保存目标文件 snapshot：
 - snapshot 存储在 `.ming/snapshots/`。
 
 当前回滚只覆盖 Ming 文件工具造成的文本文件变更，不覆盖 `bash` 命令造成的外部副作用。
-错误恢复还包括 `ErrorClassifier`：区分 transient、provider、tool_input、permission 等错误，标记 retryable/recoverable，并用于后续恢复策略。
+错误恢复还包括 `ErrorClassifier`：区分 transient、provider、tool_input、permission 等错误，标记 retryable/recoverable，并用于后续恢复策略。LLM/provider timeout 会被转换为用户可理解的“模型服务长时间没有响应”说明，原始 `litellm` / provider 异常只保存在 trace、notepad 和诊断详情里，不再默认刷到对话区。
 
 ### 认知路由 + 对抗分析
 
