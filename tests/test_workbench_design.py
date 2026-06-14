@@ -51,6 +51,10 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "toggleToolCard" in html
     assert "openModal" in html
     assert "setTab" in html
+    assert "renderMarkdown" in html
+    assert "classifyReplyStatus" in html
+    assert "计划说明" in html
+    assert "暂无产物" in html
     assert "Ming 暂停了" in html
     assert "需要你的判断" in html
     assert "停止思考" in html

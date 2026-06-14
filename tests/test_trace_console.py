@@ -90,6 +90,10 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert 'id="liveEvents"' not in html
     assert "formatRunEvent" in html
     assert "renderRunTimeline" in html
+    assert "renderMarkdown" in html
+    assert "classifyReplyStatus" in html
+    assert "计划说明" in html
+    assert "暂无产物" in html
     assert "模型思考" in html
     assert "工具执行" in html
     assert payload["agent"]["state"] == "idle"
@@ -111,6 +115,40 @@ def test_trace_console_formats_sse_event(tmp_path):
     assert "event: llm\n" in payload
     assert "data: " in payload
     assert payload.endswith("\n\n")
+
+
+def test_trace_console_loads_legacy_traces_directory(tmp_path):
+    st = SessionTrace(model="test-model", agent_version="0.1.0")
+    st.begin_turn("turn-legacy", "创建页面")
+    st.init_single_path()
+    st.finish_turn("已完成：创建页面")
+    trace_path = st.save(tmp_path / ".ming" / "traces")
+
+    state = TraceConsoleState(tmp_path).load()
+
+    assert state["process_panel"]["context"]["session_trace_path"] == str(trace_path)
+    assert state["trace_tabs"]["session_trace"]["schema_version"] == "ming-trace-v1"
+
+
+def test_trace_console_does_not_attach_unrelated_trace_to_checkpoint(tmp_path):
+    st = SessionTrace(model="test-model", agent_version="0.1.0")
+    st.begin_turn("older-turn", "旧任务")
+    st.init_single_path()
+    st.finish_turn("旧结果")
+    st.save(tmp_path / ".ming" / "traces")
+
+    CheckpointStore(tmp_path / ".ming" / "checkpoints").save(
+        "current-turn",
+        [Message(role="user", content="当前任务")],
+        tmp_path / ".ming" / "scratch" / "current-turn" / "notes.md",
+        todo={"items": [{"text": "当前任务", "status": "in_progress"}]},
+    )
+
+    state = TraceConsoleState(tmp_path).load()
+
+    context = state["process_panel"]["context"]
+    assert context["session_trace_path"] == ""
+    assert context["total_prompt_tokens"] > 0
 
 
 def test_trace_console_event_stream_reads_live_events(tmp_path):

@@ -124,6 +124,60 @@ async def test_t3_fact_check_runs_after_tool_backed_turn(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_rejects_plan_only_answer_for_execution_task(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=6),
+    )
+    calls = []
+
+    async def fake_llm(messages, config, tools=None):
+        calls.append((messages, tools))
+        if len(calls) == 1:
+            return LLMResponse(
+                content="方案：创建 `pomodoro.html`，然后运行本地服务器。",
+                finish_reason="stop",
+            )
+        if len(calls) == 2:
+            assert "只给了计划" in messages[-1].content
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "file_write",
+                            "arguments": json.dumps(
+                                {"path": "pomodoro.html", "content": "<h1>Pomodoro</h1>"}
+                            ),
+                        },
+                    }
+                ],
+            )
+        if len(calls) == 3:
+            return LLMResponse(
+                content="已完成：已创建 `pomodoro.html`，可以打开验证。",
+                finish_reason="stop",
+            )
+        return LLMResponse(content="PASS: 工具结果支持最终答复。", finish_reason="stop")
+
+    monkeypatch.setattr("ming.core.agent.call_llm", fake_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    result = await agent.chat("帮我写一个简单番茄钟页面，并运行起来")
+
+    assert result.startswith("已完成")
+    assert (tmp_path / "pomodoro.html").exists()
+    checkpoint = agent.checkpoints.load(agent.last_checkpoint_path)
+    assert checkpoint["changed_files"] == ["pomodoro.html"]
+    assert checkpoint["todo"]["items"][0]["status"] == "completed"
+    assert list((tmp_path / ".ming" / "session_traces").glob("*.json"))
+
+
+@pytest.mark.asyncio
 async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = MingConfig(
@@ -159,6 +213,8 @@ async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeyp
     assert "连续 3 次工具调用没有拿到可用的新信息" in result
     assert "no_signal" not in result
     assert calls == 3
+    checkpoint = agent.checkpoints.load(agent.last_checkpoint_path)
+    assert checkpoint["todo"]["items"][0]["status"] != "completed"
 
 
 @pytest.mark.asyncio

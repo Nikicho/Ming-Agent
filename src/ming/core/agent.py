@@ -65,7 +65,12 @@ SYSTEM_PROMPT = """\
 
 你有工具可以使用：执行命令(bash)、读文件(file_read)、写文件(file_write)、编辑文件(file_edit)。
 需要时主动使用工具完成任务，不要只用语言描述步骤。
-完成后简洁汇报结果。"""
+如果用户要求创建、修改、运行、读取、搜索或验证，必须先用工具完成并拿到证据，再回复。
+最终回复开头必须明确状态：
+- 已完成：说明做了什么、产物在哪里、如何打开或验证。
+- 未完成：说明卡在哪里、已经尝试了什么、下一步需要什么。
+- 待你确认：只在确实需要用户决策或授权时使用。
+不要把“准备做的步骤”包装成已完成结果。"""
 
 # T2 bias checklist — embedded in system prompt (always on)
 T2_BIAS_CHECKLIST = """
@@ -130,6 +135,7 @@ class Agent:
         self.current_turn_id = ""
         self.active_context_scopes = ["user", "project", "global"]
         self._last_t3_result = ""
+        self._changed_files: set[str] = set()
 
         # Initialize context layers
         full_system = SYSTEM_PROMPT + "\n" + T2_BIAS_CHECKLIST
@@ -147,6 +153,7 @@ class Agent:
         """Process user input through the full pipeline."""
         logger.debug(f"User input: {user_input[:100]}...")
         self.current_turn_id = turn_id or new_turn_id()
+        self._changed_files = set()
         self.session_trace.begin_turn(self.current_turn_id, user_input)
         self._emit_progress("context", "准备上下文")
         todo = TodoState.from_user_input(user_input)
@@ -262,6 +269,7 @@ class Agent:
         iteration = 0
         turn_start = time.time()
         used_tools = False
+        execution_guard_used = False
         t3_repair_attempted = False
         tool_strategy_replan_attempted = False
         self.loop_detector.reset()
@@ -282,7 +290,7 @@ class Agent:
                 self.session_trace.record_l5_ceiling("iteration_limit")
                 msg = f"[Ming: 达到迭代上限 {self.config.agent.max_iterations}，停止执行]"
                 self.context.add_message(Message(role="assistant", content=msg))
-                return self._finish_turn(msg, todo, notepad_path)
+                return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
 
             # L5 ceiling: wall-clock timeout
             elapsed = time.time() - turn_start
@@ -290,7 +298,7 @@ class Agent:
                 self.session_trace.record_l5_ceiling("timeout")
                 msg = f"[Ming: 超时 {self.config.agent.max_seconds}s，停止执行]"
                 self.context.add_message(Message(role="assistant", content=msg))
-                return self._finish_turn(msg, todo, notepad_path)
+                return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
 
             # Safety compaction check mid-loop
             if self.context.needs_safety_compaction():
@@ -404,12 +412,16 @@ class Agent:
                         evidence = f"{tool_name}: {result.output[:500]}"
                         self.notepad.add_evidence(notepad_path, tool_name, result.output[:500])
                         self.context.pin_evidence(evidence)
-                    todo.mark_step_completed(tool_name)
-                    self.context.set_turn_workbench(
-                        todo=todo.to_context(),
-                        notepad_path=notepad_path,
-                        tool_names=selected_tool_names,
+                    made_task_progress = event.evidence_count > 0 or (
+                        tool_name in {"file_write", "file_edit"} and not result.is_error
                     )
+                    if made_task_progress:
+                        todo.mark_step_completed(tool_name)
+                        self.context.set_turn_workbench(
+                            todo=todo.to_context(),
+                            notepad_path=notepad_path,
+                            tool_names=selected_tool_names,
+                        )
 
                     self.context.add_message(Message(
                         role="tool",
@@ -425,7 +437,7 @@ class Agent:
                             f"tool_stall: {failure.technical_detail}",
                         )
                         self.context.add_message(Message(role="assistant", content=msg))
-                        return self._finish_turn(msg, todo, notepad_path)
+                        return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
 
                     if (
                         assessment.decision == "replan"
@@ -468,6 +480,28 @@ class Agent:
                 metrics=step_metrics,
             )
             final_content = self._strip_final_marker(response.content)
+
+            if (
+                not used_tools
+                and not execution_guard_used
+                and selected_tool_schemas
+                and self._requires_tool_execution(user_input)
+                and self._looks_like_unexecuted_plan(final_content)
+            ):
+                execution_guard_used = True
+                self._emit_progress("verify", "回复像计划，要求先执行")
+                self.context.add_message(Message(role="assistant", content=final_content))
+                self.context.add_message(
+                    Message(
+                        role="user",
+                        content=(
+                            "你刚才只给了计划，没有实际使用工具。"
+                            "本轮用户要求需要落地执行：请现在调用合适工具完成创建/运行/验证，"
+                            "完成后用“已完成/未完成/待你确认”开头简洁汇报。"
+                        ),
+                    )
+                )
+                continue
 
             if not used_tools:
                 self._emit_progress("verify", "执行 T1 自检")
@@ -520,19 +554,37 @@ class Agent:
             return ToolResult(output=f"[Permission denied] {decision.reason}", is_error=True)
         if tool_name in {"file_write", "file_edit"}:
             self._snapshot_file_tool_target(tool_args)
-        return await self.tools.execute(tool_name, tool_args)
+        result = await self.tools.execute(tool_name, tool_args)
+        if tool_name in {"file_write", "file_edit"} and not result.is_error:
+            changed_file = self._file_tool_target(tool_args)
+            if changed_file:
+                self._changed_files.add(changed_file)
+        return result
 
     def _snapshot_file_tool_target(self, tool_args: str) -> None:
+        target = self._resolved_file_tool_target(tool_args)
+        if target is not None:
+            self.snapshots.snapshot(target)
+
+    def _file_tool_target(self, tool_args: str) -> str:
+        target = self._resolved_file_tool_target(tool_args)
+        if target is None:
+            return ""
+        try:
+            return str(target.relative_to(self.workspace_root))
+        except ValueError:
+            return str(target)
+
+    def _resolved_file_tool_target(self, tool_args: str) -> Path | None:
         try:
             data = json.loads(tool_args) if tool_args else {}
         except json.JSONDecodeError:
-            return
+            return None
         raw_path = data.get("path")
         if not raw_path:
-            return
+            return None
         path = Path(raw_path)
-        target = path if path.is_absolute() else self.workspace_root / path
-        self.snapshots.snapshot(target)
+        return path if path.is_absolute() else self.workspace_root / path
 
     def rollback_last_change(self) -> dict[str, int | str]:
         """Roll back the most recent file_write/file_edit snapshot."""
@@ -566,22 +618,55 @@ class Agent:
     ) -> str:
         if complete_todo:
             todo.complete_all()
+        self.session_trace.finish_turn(final_output)
+        trace_path = self.save_session_trace()
         checkpoint_path = self.checkpoints.save(
             self.current_turn_id,
             self.context.get_messages(),
             notepad_path,
             todo,
+            changed_files=sorted(self._changed_files),
         )
         self.last_checkpoint_path = checkpoint_path
-
-        self.session_trace.finish_turn(final_output)
 
         self._emit_progress(
             "done",
             "完成本轮响应",
-            detail=f"checkpoint={checkpoint_path}",
+            detail=f"checkpoint={checkpoint_path}; trace={trace_path}",
         )
         return final_output
+
+    def _requires_tool_execution(self, user_input: str) -> bool:
+        lowered = user_input.lower()
+        triggers = [
+            "创建",
+            "写",
+            "修改",
+            "编辑",
+            "运行",
+            "启动",
+            "读取",
+            "确认",
+            "验证",
+            "生成",
+            "打开",
+            "create",
+            "write",
+            "edit",
+            "run",
+            "start",
+            "verify",
+            "read",
+        ]
+        return any(trigger in lowered for trigger in triggers)
+
+    def _looks_like_unexecuted_plan(self, content: str) -> bool:
+        text = " ".join(content.split())
+        plan_markers = ["方案", "实施步骤", "步骤", "先", "然后", "接下来", "可以", "建议"]
+        done_markers = ["已完成", "已创建", "已写入", "已启动", "已验证", "可访问"]
+        return any(marker in text for marker in plan_markers) and not any(
+            marker in text for marker in done_markers
+        )
 
     def _emit_progress(self, stage: str, message: str, detail: str = "") -> None:
         if not self.progress_callback:

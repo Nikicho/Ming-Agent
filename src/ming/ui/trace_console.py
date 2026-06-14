@@ -331,6 +331,57 @@ DEMO_INDEX_HTML = """<!doctype html>
       border: 1px solid var(--line);
       border-bottom-left-radius: 6px;
     }
+    .bubble-content { display: grid; gap: 9px; }
+    .bubble-content p,
+    .bubble-content ul,
+    .bubble-content ol { margin: 0; }
+    .bubble-content ul,
+    .bubble-content ol {
+      padding-left: 20px;
+      display: grid;
+      gap: 5px;
+    }
+    .bubble-content h3 {
+      margin: 2px 0 0;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .bubble-content code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+    .reply-status {
+      display: inline-flex;
+      align-items: center;
+      justify-self: start;
+      height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--ink-2);
+      font-size: 12px;
+      font-weight: 680;
+    }
+    .reply-status.done {
+      color: var(--good);
+      background: rgba(38, 114, 82, .10);
+      border-color: rgba(38, 114, 82, .22);
+    }
+    .reply-status.pending {
+      color: var(--warn);
+      background: var(--warn-bg);
+      border-color: rgba(164, 87, 30, .25);
+    }
+    .reply-status.blocked {
+      color: var(--bad);
+      background: var(--bad-bg);
+      border-color: rgba(168, 61, 61, .25);
+    }
 
     /* ===== Tool Call Card ===== */
     .tool-card {
@@ -977,13 +1028,17 @@ DEMO_INDEX_HTML = """<!doctype html>
       const root = document.getElementById("artifactList");
       const files = artifacts.changed_files && artifacts.changed_files.length
         ? artifacts.changed_files
-        : [artifacts.session_trace_path || artifacts.checkpoint_path || "暂无产物"];
+        : [];
       root.innerHTML = "";
+      if (!files.length) {
+        root.innerHTML = `<div class="subtle">暂无产物</div>`;
+        return;
+      }
       for (const file of files) {
         const row = document.createElement("div");
         row.className = "artifact-row";
         row.innerHTML =
-          `<span class="todo-check ${file && file !== "暂无产物" ? "checked" : ""}"></span>` +
+          `<span class="todo-check checked"></span>` +
           `<span><span class="file-chip">${escapeHtml(file)}</span></span>`;
         root.appendChild(row);
       }
@@ -991,8 +1046,8 @@ DEMO_INDEX_HTML = """<!doctype html>
 
     function renderMetrics(context) {
       const root = document.getElementById("metricList");
-      const prompt = Number(context.total_prompt_tokens || 0);
-      const completion = Number(context.total_completion_tokens || 0);
+      const prompt = Number(context.total_prompt_tokens || context.turn_prompt_tokens || 0);
+      const completion = Number(context.total_completion_tokens || context.turn_completion_tokens || 0);
       const total = prompt + completion;
       const percent = Math.max(0, Math.min(100, Math.round(total / 1000)));
       root.innerHTML =
@@ -1130,10 +1185,95 @@ DEMO_INDEX_HTML = """<!doctype html>
       const node = document.createElement("article");
       const role = item.role === "user" ? "user" : "ming";
       node.className = `message ${role}`;
+      const content = item.content || "";
+      const status = role === "ming" ? classifyReplyStatus(content) : null;
       node.innerHTML =
         `<div class="message-label">${role === "user" ? "You" : "Ming"}</div>` +
-        `<div class="bubble">${escapeHtml(item.content || "")}</div>`;
+        `<div class="bubble">` +
+        `${status ? `<div class="reply-status ${status.kind}">${escapeHtml(status.label)}</div>` : ""}` +
+        `<div class="bubble-content">${renderMarkdown(content)}</div>` +
+        `</div>`;
       return node;
+    }
+
+    function classifyReplyStatus(content) {
+      const value = text(content).trim();
+      if (!value) return null;
+      if (value.startsWith("已完成")) return { kind: "done", label: "已完成" };
+      if (value.startsWith("未完成") || value.includes("暂停了本轮执行")) return { kind: "blocked", label: "未完成" };
+      if (value.startsWith("待你确认") || value.includes("需要你的判断")) return { kind: "pending", label: "待你确认" };
+      if (/(方案|实施步骤|^\\d+\\.\\s|先.*然后)/.test(value) && !/(已创建|已写入|已启动|已验证|可访问)/.test(value)) {
+        return { kind: "pending", label: "计划说明" };
+      }
+      return null;
+    }
+
+    function renderMarkdown(content) {
+      const lines = text(content).split(/\\r?\\n/);
+      const html = [];
+      let paragraph = [];
+      let listType = "";
+      const closeParagraph = () => {
+        if (!paragraph.length) return;
+        html.push(`<p>${formatInline(paragraph.join(" "))}</p>`);
+        paragraph = [];
+      };
+      const closeList = () => {
+        if (!listType) return;
+        html.push(`</${listType}>`);
+        listType = "";
+      };
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+          closeParagraph();
+          closeList();
+          continue;
+        }
+        const heading = line.match(/^#{1,3}\\s+(.+)$/);
+        if (heading) {
+          closeParagraph();
+          closeList();
+          html.push(`<h3>${formatInline(heading[1])}</h3>`);
+          continue;
+        }
+        const ordered = line.match(/^\\d+\\.\\s+(.+)$/);
+        if (ordered) {
+          closeParagraph();
+          if (listType !== "ol") {
+            closeList();
+            html.push("<ol>");
+            listType = "ol";
+          }
+          html.push(`<li>${formatInline(ordered[1])}</li>`);
+          continue;
+        }
+        const unordered = line.match(/^[-*]\\s+(.+)$/);
+        if (unordered) {
+          closeParagraph();
+          if (listType !== "ul") {
+            closeList();
+            html.push("<ul>");
+            listType = "ul";
+          }
+          html.push(`<li>${formatInline(unordered[1])}</li>`);
+          continue;
+        }
+        closeList();
+        paragraph.push(line);
+      }
+      closeParagraph();
+      closeList();
+      return html.join("");
+    }
+
+    function formatInline(value) {
+      return text(value).split(/(`[^`]+`)/g).map(part => {
+        if (part.startsWith("`") && part.endsWith("`")) {
+          return `<code>${escapeHtml(part.slice(1, -1))}</code>`;
+        }
+        return escapeHtml(part);
+      }).join("");
     }
 
     function renderVerdictCard(payload) {
@@ -1377,10 +1517,15 @@ class TraceConsoleState:
         self.ming_root = self.workspace_root / ".ming"
 
     def load(self) -> dict[str, Any]:
-        session_trace_path = self._latest_file(self.ming_root / "session_traces", "*.json")
         checkpoint_path = self._latest_file(self.ming_root / "checkpoints", "*/checkpoint.json")
-        session = self._read_json(session_trace_path)
         checkpoint = self._read_json(checkpoint_path)
+        checkpoint_turn_id = checkpoint.get("turn_id", "")
+        session_trace_path = (
+            self._session_trace_for_turn(checkpoint_turn_id)
+            if checkpoint_turn_id
+            else self._latest_session_trace()
+        )
+        session = self._read_json(session_trace_path)
 
         turn = self._latest_turn(session)
         turn_id = turn.get("turn_id") or checkpoint.get("turn_id") or ""
@@ -1389,7 +1534,7 @@ class TraceConsoleState:
         timeline = self._build_timeline(turn)
         sessions = self._build_sessions(session, checkpoint)
         artifacts = self._build_artifacts(session_trace_path, checkpoint_path, checkpoint)
-        context = self._build_context(session, turn, artifacts)
+        context = self._build_context(session, turn, artifacts, checkpoint)
         config_snapshot = self._build_config_snapshot()
         trace_tabs = self._build_trace_tabs(session, turn, timeline, artifacts, config_snapshot)
 
@@ -1629,17 +1774,21 @@ class TraceConsoleState:
         session: dict[str, Any],
         turn: dict[str, Any],
         artifacts: dict[str, Any],
+        checkpoint: dict[str, Any],
     ) -> dict[str, Any]:
         metrics = session.get("session_metrics") or {}
         turn_metrics = turn.get("turn_metrics") or {}
+        fallback_tokens = self._estimate_checkpoint_tokens(checkpoint)
         return {
             "session_trace_path": artifacts["session_trace_path"],
             "schema_version": session.get("schema_version", ""),
             "total_turns": metrics.get("total_turns", 0),
             "total_llm_calls": metrics.get("total_llm_calls", 0),
-            "total_prompt_tokens": metrics.get("total_prompt_tokens", 0),
+            "total_prompt_tokens": metrics.get("total_prompt_tokens", 0) or fallback_tokens,
             "total_completion_tokens": metrics.get("total_completion_tokens", 0),
             "turn_llm_calls": turn_metrics.get("total_llm_calls", 0),
+            "turn_prompt_tokens": turn_metrics.get("total_prompt_tokens", 0) or fallback_tokens,
+            "turn_completion_tokens": turn_metrics.get("total_completion_tokens", 0),
             "turn_latency_ms": turn_metrics.get("total_latency_ms", 0),
             "estimated_cost_usd": turn_metrics.get("estimated_cost_usd", 0.0),
         }
@@ -1728,6 +1877,36 @@ class TraceConsoleState:
             return None
         files = sorted(root.glob(pattern), key=lambda path: path.stat().st_mtime)
         return files[-1] if files else None
+
+    def _latest_session_trace(self) -> Path | None:
+        candidates = [
+            self._latest_file(self.ming_root / "session_traces", "*.json"),
+            self._latest_file(self.ming_root / "traces", "*.json"),
+        ]
+        existing = [path for path in candidates if path is not None and path.exists()]
+        if not existing:
+            return None
+        return sorted(existing, key=lambda path: path.stat().st_mtime)[-1]
+
+    def _session_trace_for_turn(self, turn_id: str) -> Path | None:
+        if not turn_id:
+            return None
+        for root in [self.ming_root / "session_traces", self.ming_root / "traces"]:
+            if not root.exists():
+                continue
+            direct = root / f"{turn_id}.json"
+            if direct.exists():
+                return direct
+            for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+                payload = self._read_json(path)
+                if any(turn.get("turn_id") == turn_id for turn in payload.get("turns") or []):
+                    return path
+        return None
+
+    def _estimate_checkpoint_tokens(self, checkpoint: dict[str, Any]) -> int:
+        messages = checkpoint.get("messages") or []
+        total_chars = sum(len(str(message.get("content", ""))) for message in messages)
+        return int(total_chars / 2.5) if total_chars else 0
 
     def _read_json(self, path: Path | None) -> dict[str, Any]:
         if not path or not path.exists():
