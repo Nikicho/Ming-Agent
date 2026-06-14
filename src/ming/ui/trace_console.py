@@ -1,4 +1,4 @@
-# ruff: noqa: E501
+﻿# ruff: noqa: E501
 """Local Ming Agent Workbench.
 
 This stdlib HTTP app is the current Web UI stage described in the Ming design:
@@ -20,6 +20,1206 @@ from ming.core.live_events import LiveEventStore
 from ming.ui.chat_runtime import ChatRuntime
 
 WORKBENCH_SCHEMA_VERSION = "ming-workbench-v1"
+
+
+DEMO_INDEX_HTML = """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ming Agent Workbench</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f3ef;
+      --surface: #fbfaf7;
+      --surface-2: #f0eee8;
+      --surface-3: #e7e4dc;
+      --ink: #1d2522;
+      --ink-2: #48534f;
+      --muted: #74807b;
+      --line: #d7d3c8;
+      --accent: #167866;
+      --accent-2: #dfeee9;
+      --warn: #a4571e;
+      --warn-bg: #f5e6d8;
+      --bad: #a83d3d;
+      --bad-bg: #f3dddd;
+      --good: #267252;
+      --shadow: 0 24px 70px rgba(43, 54, 49, .10);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+      --mono: "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      --sidebar-w: 286px;
+      --process-w: 342px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; margin: 0; }
+    body {
+      height: 100dvh;
+      overflow: hidden;
+      font-family: var(--sans);
+      background:
+        radial-gradient(circle at 14% 16%, rgba(22, 120, 102, .11), transparent 28%),
+        linear-gradient(135deg, #f8f7f3 0%, var(--bg) 52%, #ece9e1 100%);
+      color: var(--ink);
+      letter-spacing: 0;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .18;
+      background-image:
+        linear-gradient(rgba(29, 37, 34, .04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(29, 37, 34, .04) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(to bottom, #000, transparent 70%);
+    }
+    button, textarea, input { font: inherit; }
+    button {
+      border: 0;
+      cursor: pointer;
+      transition: transform .18s ease, background .18s ease, border-color .18s ease, color .18s ease;
+    }
+    button:active { transform: translateY(1px) scale(.99); }
+    button:disabled { cursor: not-allowed; opacity: .48; transform: none; }
+    button:focus-visible, textarea:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(22, 120, 102, .25);
+      outline-offset: 2px;
+    }
+    .app-shell {
+      width: min(1720px, calc(100vw - 32px));
+      height: calc(100dvh - 32px);
+      margin: 16px auto;
+      display: grid;
+      grid-template-columns: 0px minmax(400px, 1fr) var(--process-w);
+      gap: 14px;
+      transition: grid-template-columns .3s ease;
+    }
+    .app-shell.sidebar-open { grid-template-columns: var(--sidebar-w) minmax(400px, 1fr) var(--process-w); }
+    .app-shell.process-closed { grid-template-columns: 0px minmax(400px, 1fr) 0px; }
+    .app-shell.sidebar-open.process-closed { grid-template-columns: var(--sidebar-w) minmax(400px, 1fr) 0px; }
+    .panel {
+      background: rgba(251, 250, 247, .92);
+      border: 1px solid rgba(215, 211, 200, .86);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
+      transition: opacity .3s ease, transform .3s ease;
+    }
+    .session-rail {
+      display: flex;
+      flex-direction: column;
+      height: calc(100dvh - 32px);
+      opacity: 0;
+      transform: translateX(-12px);
+      pointer-events: none;
+    }
+    .sidebar-open .session-rail {
+      opacity: 1;
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+    .rail-head {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand-row, .topbar, .tool-card-head, .side-block header, .modal-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-row, .side-block header, .modal-head { justify-content: space-between; }
+    .brand, .topbar-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+    }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: var(--ink);
+      color: var(--surface);
+      font-weight: 760;
+    }
+    .new-chat, .send-button {
+      height: 34px;
+      padding: 0 12px;
+      border-radius: var(--radius-sm);
+      background: var(--accent);
+      color: #fff;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .search {
+      width: 100%;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #fffefa;
+      color: var(--ink);
+      padding: 0 12px;
+      margin-top: 14px;
+    }
+    .session-list {
+      padding: 10px;
+      overflow: auto;
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+    }
+    .session-item {
+      text-align: left;
+      padding: 12px;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid transparent;
+    }
+    .session-item:hover { background: var(--surface-2); }
+    .session-item.active {
+      background: #ffffff;
+      border-color: rgba(22, 120, 102, .28);
+      box-shadow: 0 8px 28px rgba(43, 54, 49, .06);
+    }
+    .session-title { font-weight: 700; font-size: 13px; line-height: 1.35; margin-bottom: 6px; }
+    .session-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .session-meta strong { color: var(--ink-2); font-weight: 650; }
+    .rail-footer {
+      margin-top: auto;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 8px;
+    }
+    .subtle, .meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .main-workspace {
+      height: calc(100dvh - 32px);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 0;
+    }
+    .topbar {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .topbar-brand .brand-mark {
+      width: 28px;
+      height: 28px;
+      font-size: 14px;
+      border-radius: 8px;
+    }
+    .topbar-session {
+      color: var(--ink-2);
+      font-size: 13px;
+      font-weight: 600;
+      padding-left: 10px;
+      border-left: 1px solid var(--line);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .topbar-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--ink-2);
+      display: grid;
+      place-items: center;
+      font-size: 18px;
+    }
+    .icon-button:hover { background: var(--surface-2); }
+    .icon-button.active {
+      background: var(--accent-2);
+      color: var(--accent);
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fffefa;
+      color: var(--ink-2);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .chip.accent {
+      background: var(--accent-2);
+      border-color: rgba(22, 120, 102, .28);
+      color: var(--accent);
+      font-weight: 650;
+    }
+    .conversation {
+      overflow: auto;
+      padding: 22px 22px 16px;
+      display: grid;
+      align-content: start;
+      gap: 16px;
+      min-height: 0;
+    }
+    .message { display: grid; gap: 8px; max-width: 82%; }
+    .message.user { justify-self: end; }
+    .message.ming { justify-self: start; }
+    .message-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+    .bubble {
+      border-radius: 16px;
+      padding: 13px 15px;
+      line-height: 1.55;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+    .message.user .bubble {
+      background: var(--ink);
+      color: #fff;
+      border-bottom-right-radius: 6px;
+    }
+    .message.ming .bubble {
+      background: #fffefa;
+      border: 1px solid var(--line);
+      border-bottom-left-radius: 6px;
+    }
+    .tool-card {
+      max-width: 82%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 254, 250, .76);
+      overflow: hidden;
+      justify-self: start;
+    }
+    .tool-card-head {
+      padding: 10px 13px;
+      font-size: 12px;
+      color: var(--ink-2);
+      cursor: pointer;
+    }
+    .tool-card-head:hover { background: var(--surface-2); }
+    .tool-icon { font-size: 14px; }
+    .tool-name {
+      font-weight: 700;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .tool-status {
+      margin-left: auto;
+      font-size: 11px;
+    }
+    .tool-status.ok { color: var(--good); }
+    .tool-status.error { color: var(--bad); }
+    .tool-expand { color: var(--muted); font-size: 12px; margin-left: 4px; }
+    .tool-card-body {
+      display: none;
+      padding: 0 13px 12px;
+      font-size: 12px;
+      color: var(--ink-2);
+      border-top: 1px solid var(--line);
+    }
+    .tool-card.open .tool-card-body { display: block; }
+    .notice {
+      max-width: 82%;
+      padding: 14px 15px;
+      border-radius: var(--radius-md);
+      background: var(--warn-bg);
+      border: 1px solid rgba(164, 87, 30, .24);
+      display: grid;
+      gap: 8px;
+      justify-self: start;
+    }
+    .notice-title { font-weight: 760; color: #6f3a13; font-size: 13px; }
+    .notice p { margin: 0; color: #6f4a2a; line-height: 1.5; font-size: 13px; }
+    .open-detail {
+      background: transparent;
+      color: var(--accent);
+      font-weight: 700;
+      padding: 0;
+      white-space: nowrap;
+      font-size: 12px;
+      justify-self: start;
+    }
+    .verdict-card {
+      max-width: 92%;
+      border: 2px solid rgba(164, 87, 30, .35);
+      border-radius: var(--radius-lg);
+      background: #fffefa;
+      display: grid;
+      grid-template-rows: auto auto auto auto;
+      align-self: start;
+      min-height: max-content;
+      overflow: hidden;
+      justify-self: start;
+    }
+    .verdict-head {
+      padding: 14px 16px;
+      background: var(--warn-bg);
+      border-bottom: 1px solid rgba(164, 87, 30, .2);
+      display: grid;
+      gap: 5px;
+    }
+    .verdict-head-title {
+      font-weight: 780;
+      font-size: 14px;
+      color: #6f3a13;
+      line-height: 1.35;
+    }
+    .verdict-head-topic {
+      font-size: 13px;
+      color: #6f4a2a;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .verdict-columns { display: grid; grid-template-columns: 1fr 1fr; }
+    .verdict-col { padding: 14px 16px; }
+    .verdict-col:first-child { border-right: 1px solid var(--line); }
+    .verdict-col-title {
+      font-weight: 720;
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    .verdict-col ul {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 12px;
+      color: var(--ink-2);
+      line-height: 1.6;
+    }
+    .verdict-analysis {
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--ink-2);
+      line-height: 1.5;
+      background: var(--surface-2);
+    }
+    .verdict-actions {
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .verdict-btn {
+      height: 36px;
+      padding: 0 16px;
+      border-radius: var(--radius-sm);
+      font-weight: 680;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .verdict-btn.primary { background: var(--accent); color: #fff; }
+    .verdict-btn.secondary {
+      background: #fffefa;
+      color: var(--ink-2);
+      border: 1px solid var(--line);
+    }
+    .verdict-btn.tertiary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px dashed rgba(22, 120, 102, .3);
+    }
+    .composer {
+      padding: 14px 16px;
+      border-top: 1px solid var(--line);
+      background: rgba(251, 250, 247, .88);
+    }
+    .composer-box {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 10px;
+      align-items: end;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: #fffefa;
+      padding: 10px;
+    }
+    textarea {
+      resize: none;
+      min-height: 44px;
+      max-height: 160px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      padding: 4px 6px;
+      line-height: 1.5;
+    }
+    .send-button { height: 40px; padding: 0 16px; border-radius: var(--radius-md); font-weight: 760; }
+    .stop-button {
+      height: 40px;
+      padding: 0 12px;
+      border-radius: var(--radius-md);
+      background: var(--surface-2);
+      color: var(--ink-2);
+      border: 1px solid var(--line);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .composer-hint {
+      margin-top: 6px;
+      text-align: right;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .process-rail {
+      display: flex;
+      flex-direction: column;
+      height: calc(100dvh - 32px);
+      transition: opacity .3s ease, transform .3s ease;
+    }
+    .process-closed .process-rail {
+      opacity: 0;
+      transform: translateX(12px);
+      pointer-events: none;
+    }
+    .right-scroll {
+      overflow: auto;
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+      min-height: 0;
+    }
+    .section-title { font-size: 13px; font-weight: 760; }
+    .side-block {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 254, 250, .76);
+      padding: 13px;
+      display: grid;
+      gap: 10px;
+    }
+    .small-button {
+      height: 28px;
+      padding: 0 9px;
+      border-radius: 7px;
+      background: var(--surface-2);
+      color: var(--ink-2);
+      border: 1px solid var(--line);
+      font-weight: 650;
+      font-size: 12px;
+    }
+    .todo-list, .artifact-list, .metric-list, .context-list, .live-events {
+      display: grid;
+      gap: 8px;
+    }
+    .todo-row, .artifact-row, .metric-row, .context-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 9px;
+      align-items: start;
+      font-size: 12px;
+      color: var(--ink-2);
+      line-height: 1.45;
+    }
+    .todo-check {
+      width: 15px;
+      height: 15px;
+      margin-top: 2px;
+      border-radius: 4px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .todo-check.checked {
+      background: var(--accent);
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 3px #fff;
+    }
+    .file-chip { font-family: var(--mono); color: var(--ink); overflow-wrap: anywhere; }
+    .meter {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--surface-3);
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    .meter-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+    .metric-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    .metric-value {
+      font-family: var(--mono);
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+    }
+    .live-events { max-height: 180px; overflow: auto; }
+    .live-event {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+      background: rgba(255, 254, 250, .8);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      background: rgba(29, 37, 34, .36);
+    }
+    .modal-backdrop.open { display: grid; }
+    .modal {
+      width: min(980px, 100%);
+      max-height: min(820px, calc(100dvh - 48px));
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      background: var(--surface);
+      border: 1px solid rgba(215, 211, 200, .92);
+      border-radius: 24px;
+      box-shadow: 0 34px 120px rgba(29, 37, 34, .24);
+      overflow: hidden;
+    }
+    .modal-head { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+    .modal-title { font-size: 18px; font-weight: 780; }
+    .close-button {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: var(--surface-2);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      font-size: 20px;
+      line-height: 1;
+    }
+    .modal-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(240, 238, 232, .7);
+    }
+    .tab-button {
+      height: 34px;
+      padding: 0 12px;
+      border-radius: var(--radius-sm);
+      color: var(--ink-2);
+      background: transparent;
+      font-weight: 680;
+    }
+    .tab-button.active {
+      color: var(--accent);
+      background: #fffefa;
+      box-shadow: inset 0 0 0 1px rgba(22, 120, 102, .22);
+    }
+    .modal-body { overflow: auto; padding: 18px; }
+    .tab-panel.hidden { display: none; }
+    .timeline { display: grid; gap: 12px; }
+    .timeline-row {
+      display: grid;
+      grid-template-columns: 106px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .timeline-time {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding-top: 3px;
+    }
+    .timeline-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: #fffefa;
+      padding: 13px;
+      display: grid;
+      gap: 8px;
+    }
+    .timeline-card.warning { background: var(--warn-bg); border-color: rgba(164, 87, 30, .25); }
+    .timeline-card.error { background: var(--bad-bg); border-color: rgba(168, 61, 61, .25); }
+    .timeline-card strong { font-size: 13px; }
+    .timeline-card p { margin: 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #202824;
+      color: #f0f3ee;
+      border-radius: var(--radius-md);
+      padding: 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    @media (max-width: 900px) {
+      .app-shell { grid-template-columns: 0px minmax(0, 1fr) 0px !important; }
+      .process-rail, .session-rail { display: none; }
+      .verdict-columns { grid-template-columns: 1fr; }
+      .verdict-col:first-child { border-right: 0; border-bottom: 1px solid var(--line); }
+      .message, .tool-card, .notice, .verdict-card { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <aside class="panel session-rail" id="sessionRail" aria-label="会话记录">
+      <div class="rail-head">
+        <div class="brand-row">
+          <div class="brand"><span class="brand-mark">明</span><span>Ming</span></div>
+          <button class="new-chat" type="button" id="newChatBtn">新会话</button>
+        </div>
+        <input class="search" value="" placeholder="搜索会话" aria-label="搜索会话">
+      </div>
+      <div class="session-list" id="sessionList"></div>
+      <div class="rail-footer">
+        <div class="subtle">Ming 任务工作台 · 本地运行</div>
+      </div>
+    </aside>
+
+    <main class="panel main-workspace" id="mainWorkspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button" type="button" id="toggleSidebar" title="切换会话列表">☰</button>
+          <div class="topbar-brand"><span class="brand-mark">明</span><span>Ming</span></div>
+          <div class="topbar-session" id="taskText">暂无任务</div>
+        </div>
+        <div class="topbar-right">
+          <span class="chip" id="stateText">loading</span>
+          <button class="icon-button" type="button" data-modal="timeline" title="做了什么">◎</button>
+          <button class="icon-button active" type="button" id="toggleProcess" title="切换过程面板">▣</button>
+          <button class="icon-button" type="button" data-modal="settings" title="设置与模型">⚙</button>
+        </div>
+      </header>
+
+      <section class="conversation" id="conversation" aria-label="当前会话"></section>
+
+      <form class="composer" id="chatForm">
+        <div class="composer-box">
+          <textarea id="messageInput" name="message" aria-label="输入" placeholder="说点什么..." rows="1"></textarea>
+          <button class="stop-button" id="stopTurnBtn" type="button" disabled>停止思考</button>
+          <button class="send-button" id="sendBtn" type="submit">发送</button>
+        </div>
+        <div class="composer-hint"><span id="chatStatus">ready</span> · Enter 发送 · Shift+Enter 换行</div>
+      </form>
+    </main>
+
+    <aside class="panel process-rail" id="processRail" aria-label="过程状态">
+      <div class="rail-head">
+        <div class="section-title">过程状态</div>
+        <div class="subtle">Ming 正在操作的文件、计划、资源用量。</div>
+      </div>
+      <div class="right-scroll">
+        <section class="side-block">
+          <header><div class="section-title">产物</div><button class="small-button" type="button" data-modal="session_trace">打开</button></header>
+          <div class="artifact-list" id="artifactList"></div>
+        </section>
+        <section class="side-block">
+          <header><div class="section-title">TODO</div></header>
+          <div class="todo-list" id="todoList"></div>
+        </section>
+        <section class="side-block">
+          <header><div class="section-title">Token</div></header>
+          <div class="metric-list" id="metricList"></div>
+        </section>
+        <section class="side-block">
+          <header><div class="section-title">Context</div></header>
+          <div class="context-list" id="contextList"></div>
+        </section>
+        <section class="side-block">
+          <header><div class="section-title">执行过程</div></header>
+          <div class="timeline" id="runTimeline"></div>
+        </section>
+        <section class="side-block">
+          <header><div class="section-title">SSE 实时事件</div><span class="subtle" id="liveStatus">connecting</span></header>
+          <div class="live-events" id="liveEvents"></div>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <div class="modal-backdrop" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal">
+      <header class="modal-head">
+        <div>
+          <div class="modal-title" id="modalTitle">诊断详情</div>
+          <div class="subtle">Ming 的动作记录、异常分析、SessionTrace。</div>
+        </div>
+        <button class="close-button" type="button" id="closeModal" aria-label="关闭">&times;</button>
+      </header>
+      <nav class="modal-tabs" aria-label="详情类型">
+        <button class="tab-button active" type="button" data-tab="timeline">做了什么</button>
+        <button class="tab-button" type="button" data-tab="exception">异常原因</button>
+        <button class="tab-button" type="button" data-tab="session_trace">SessionTrace</button>
+        <button class="tab-button" type="button" data-tab="settings">设置与模型</button>
+      </nav>
+      <div class="modal-body">
+        <section class="tab-panel" data-panel="timeline"><div class="timeline" id="timelinePanel"></div></section>
+        <section class="tab-panel hidden" data-panel="exception"><div class="timeline" id="exceptionPanel"></div></section>
+        <section class="tab-panel hidden" data-panel="session_trace"><pre id="tracePanel">{}</pre></section>
+        <section class="tab-panel hidden" data-panel="settings"><pre id="settingsPanel">{}</pre></section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const appShell = document.getElementById("appShell");
+    const modal = document.getElementById("detailModal");
+    const closeModal = document.getElementById("closeModal");
+    const tabButtons = Array.from(document.querySelectorAll(".tab-button"));
+    const panels = Array.from(document.querySelectorAll(".tab-panel"));
+    const conversation = [];
+    const liveEvents = [];
+    const liveRunEvents = [];
+    let stateTimeline = [];
+    let traceTabs = {};
+    let currentState = {};
+
+    async function loadState() {
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
+        currentState = await response.json();
+        render(currentState);
+      } catch (error) {
+        document.getElementById("stateText").textContent = "reconnecting";
+      }
+    }
+
+    function render(state) {
+      document.getElementById("taskText").textContent = state.current_task.text || "暂无任务";
+      document.getElementById("stateText").textContent = `${state.agent.state} · ${state.agent.mode}`;
+      stateTimeline = state.timeline || [];
+      traceTabs = state.trace_tabs || {};
+      renderSessions(state.sessions || []);
+      renderTodo((state.process_panel && state.process_panel.todo.items) || []);
+      renderArtifacts((state.process_panel && state.process_panel.artifacts) || {});
+      renderMetrics((state.process_panel && state.process_panel.context) || {});
+      renderContext((state.process_panel && state.process_panel.context) || {}, state.workspace);
+      renderRunTimeline();
+      renderModalTabs();
+    }
+
+    function renderSessions(sessions) {
+      const root = document.getElementById("sessionList");
+      root.innerHTML = "";
+      if (!sessions.length) {
+        root.innerHTML = `<div class="subtle">暂无历史会话</div>`;
+        return;
+      }
+      for (const [index, session] of sessions.entries()) {
+        const node = document.createElement("button");
+        node.className = `session-item ${index === 0 ? "active" : ""}`;
+        node.type = "button";
+        node.innerHTML =
+          `<div class="session-title">${escapeHtml(session.title)}</div>` +
+          `<div class="session-meta"><span>${escapeHtml(session.started_at || "")}</span><strong>${escapeHtml(session.status)}</strong></div>`;
+        root.appendChild(node);
+      }
+    }
+
+    function renderTodo(items) {
+      const root = document.getElementById("todoList");
+      root.innerHTML = "";
+      if (!items.length) {
+        root.innerHTML = `<div class="subtle">暂无 TODO</div>`;
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "todo-row";
+        row.innerHTML =
+          `<span class="todo-check ${item.status === "completed" ? "checked" : ""}"></span>` +
+          `<span>${escapeHtml(item.text || "")}<br><span class="subtle">${escapeHtml(item.status || "")}</span></span>`;
+        root.appendChild(row);
+      }
+    }
+
+    function renderArtifacts(artifacts) {
+      const root = document.getElementById("artifactList");
+      const files = artifacts.changed_files && artifacts.changed_files.length
+        ? artifacts.changed_files
+        : [artifacts.session_trace_path || artifacts.checkpoint_path || "暂无产物"];
+      root.innerHTML = "";
+      for (const file of files) {
+        const row = document.createElement("div");
+        row.className = "artifact-row";
+        row.innerHTML =
+          `<span class="todo-check ${file && file !== "暂无产物" ? "checked" : ""}"></span>` +
+          `<span><span class="file-chip">${escapeHtml(file)}</span></span>`;
+        root.appendChild(row);
+      }
+    }
+
+    function renderMetrics(context) {
+      const root = document.getElementById("metricList");
+      const prompt = Number(context.total_prompt_tokens || 0);
+      const completion = Number(context.total_completion_tokens || 0);
+      const total = prompt + completion;
+      const percent = Math.max(0, Math.min(100, Math.round(total / 1000)));
+      root.innerHTML =
+        `<div class="metric-row"><span>上下文占用</span><span class="metric-value">${percent}%</span></div>` +
+        `<div class="meter" aria-hidden="true"><div class="meter-fill" style="width:${percent}%"></div></div>` +
+        `<div class="metric-row"><span>本轮模型调用</span><span class="metric-value">${escapeHtml(context.turn_llm_calls || 0)}</span></div>` +
+        `<div class="metric-row"><span>总模型调用</span><span class="metric-value">${escapeHtml(context.total_llm_calls || 0)}</span></div>` +
+        `<div class="metric-row"><span>估算成本</span><span class="metric-value">$${escapeHtml(context.estimated_cost_usd || 0)}</span></div>`;
+    }
+
+    function renderContext(context, workspace) {
+      const root = document.getElementById("contextList");
+      root.innerHTML =
+        `<div class="context-row"><span class="todo-check checked"></span><span>工作区：${escapeHtml(workspace || "")}</span></div>` +
+        `<div class="context-row"><span class="todo-check ${context.schema_version ? "checked" : ""}"></span><span>Trace：${escapeHtml(context.schema_version || "暂无")}</span></div>` +
+        `<div class="context-row"><span class="todo-check ${context.session_trace_path ? "checked" : ""}"></span><span>SessionTrace：${escapeHtml(context.session_trace_path || "暂无")}</span></div>`;
+    }
+
+    function renderRunTimeline(cards) {
+      const root = document.getElementById("runTimeline");
+      const data = cards || (liveRunEvents.length ? liveRunEvents : stateTimeline);
+      root.innerHTML = "";
+      if (!data.length) {
+        root.innerHTML = `<div class="subtle">暂无执行过程</div>`;
+        return;
+      }
+      for (const card of data) {
+        root.appendChild(renderProgressCard(card));
+      }
+    }
+
+    function renderProgressCard(card) {
+      const row = document.createElement("div");
+      row.className = "timeline-row";
+      row.innerHTML =
+        `<div class="timeline-time">${escapeHtml(card.kind || "event")}</div>` +
+        `<div class="timeline-card ${card.status === "error" ? "error" : card.kind === "notice" ? "warning" : ""}">` +
+        `<strong>${escapeHtml(card.title || "")}</strong>` +
+        `<p>${escapeHtml(card.summary || "")}</p></div>`;
+      row.addEventListener("click", () => {
+        document.getElementById("tracePanel").textContent = JSON.stringify(card.details || {}, null, 2);
+        openModal("session_trace");
+      });
+      return row;
+    }
+
+    function renderModalTabs() {
+      renderTimelinePanel();
+      renderExceptionPanel();
+      document.getElementById("tracePanel").textContent = JSON.stringify(traceTabs.session_trace || {}, null, 2);
+      document.getElementById("settingsPanel").textContent = JSON.stringify(traceTabs.settings || {}, null, 2);
+    }
+
+    function renderTimelinePanel() {
+      const root = document.getElementById("timelinePanel");
+      root.innerHTML = "";
+      const cards = traceTabs.timeline || stateTimeline || [];
+      for (const card of cards) {
+        root.appendChild(renderProgressCard(card));
+      }
+      if (!cards.length) root.innerHTML = `<div class="subtle">暂无记录</div>`;
+    }
+
+    function renderExceptionPanel() {
+      const root = document.getElementById("exceptionPanel");
+      const exception = traceTabs.exception || {};
+      root.innerHTML =
+        `<div class="timeline-row"><div class="timeline-time">类别</div><div class="timeline-card ${exception.error ? "error" : ""}"><strong>${exception.error ? "本轮遇到问题" : "暂无异常"}</strong><p>${escapeHtml(exception.notice || "暂无异常。")}</p></div></div>`;
+    }
+
+    function renderConversationItem(item) {
+      if (item.role === "tool") {
+        const event = item.content || {};
+        const node = document.createElement("div");
+        node.className = "tool-card";
+        node.innerHTML =
+          `<div class="tool-card-head"><span class="tool-icon">🔧</span><span class="tool-name">${escapeHtml(event.tool || event.stage || "tool")}</span><span>${escapeHtml(event.message || "")}</span><span class="tool-status ok">完成</span><span class="tool-expand">▼</span></div>` +
+          `<div class="tool-card-body"><p>${escapeHtml(event.detail || "暂无详情")}</p></div>`;
+        node.querySelector(".tool-card-head").addEventListener("click", () => toggleToolCard(node));
+        return node;
+      }
+      if (item.role === "notice" || item.role === "system") {
+        const node = document.createElement("section");
+        node.className = "notice";
+        node.innerHTML =
+          `<div class="notice-title">Ming 暂停了</div><p>${escapeHtml(item.content || "")}</p>` +
+          `<button class="open-detail" type="button" data-modal="exception">为什么会这样 →</button>`;
+        node.querySelector("[data-modal]").addEventListener("click", () => openModal("exception"));
+        return node;
+      }
+      if (item.role === "verdict") {
+        return renderVerdictCard(item.content || {});
+      }
+      const node = document.createElement("article");
+      const role = item.role === "user" ? "user" : "ming";
+      node.className = `message ${role}`;
+      node.innerHTML =
+        `<div class="message-label">${role === "user" ? "You" : "Ming"}</div>` +
+        `<div class="bubble">${escapeHtml(item.content || "")}</div>`;
+      return node;
+    }
+
+    function renderVerdictCard(payload) {
+      const node = document.createElement("div");
+      node.className = "verdict-card";
+      node.innerHTML =
+        `<div class="verdict-head"><div class="verdict-head-title">需要你的判断</div><div class="verdict-head-topic">${escapeHtml(payload.topic || "Ming 检测到两个方向都成立，需要你选择。")}</div></div>` +
+        `<div class="verdict-columns"><div class="verdict-col"><div class="verdict-col-title">观点 A</div><ul><li>${escapeHtml(payload.a || "继续当前策略")}</li></ul></div><div class="verdict-col"><div class="verdict-col-title">观点 B</div><ul><li>${escapeHtml(payload.b || "切换策略")}</li></ul></div></div>` +
+        `<div class="verdict-analysis"><strong>分歧根源：</strong>${escapeHtml(payload.analysis || "任务目标存在多种合理解释。")}</div>` +
+        `<div class="verdict-actions"><button class="verdict-btn primary" type="button">采纳观点 A</button><button class="verdict-btn secondary" type="button">采纳观点 B</button><button class="verdict-btn tertiary" type="button">我有不同看法...</button></div>`;
+      return node;
+    }
+
+    function toggleToolCard(node) {
+      node.classList.toggle("open");
+    }
+
+    function renderConversation() {
+      const root = document.getElementById("conversation");
+      root.innerHTML = "";
+      if (!conversation.length) {
+        conversation.push({ role: "ming", content: "有什么需要思考或解决的问题吗？我们可以一起梳理。" });
+      }
+      for (const item of conversation) {
+        root.appendChild(renderConversationItem(item));
+      }
+      root.scrollTop = root.scrollHeight;
+    }
+
+    function appendConversation(role, content) {
+      conversation.push({ role, content });
+      if (conversation.length > 80) conversation.shift();
+      renderConversation();
+    }
+
+    async function submitChat(event) {
+      event.preventDefault();
+      const input = document.getElementById("messageInput");
+      const message = input.value.trim();
+      if (!message) return;
+      appendConversation("user", message);
+      setChatRunning(true, "submitting");
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const payload = await response.json();
+      if (response.status === 202) {
+        input.value = "";
+        setChatRunning(true, `running ${payload.turn_id}`);
+      } else {
+        setChatRunning(false, payload.status || "error");
+        appendConversation("notice", payload.error || payload.status || "submit failed");
+      }
+    }
+
+    async function stopTurn() {
+      setChatRunning(true, "stopping");
+      const response = await fetch("/api/turns/current/stop", { method: "POST" });
+      const payload = await response.json();
+      if (response.status === 200) {
+        appendConversation("notice", "已停止本轮思考。");
+      }
+      setChatRunning(false, payload.status || "idle");
+    }
+
+    function setChatRunning(running, label) {
+      document.getElementById("chatStatus").textContent = label;
+      document.getElementById("sendBtn").disabled = running;
+      document.getElementById("stopTurnBtn").disabled = !running;
+    }
+
+    function formatRunEvent(event) {
+      const labels = {
+        submitted: "收到任务",
+        context: "整理上下文",
+        route: "选择策略",
+        llm: "模型思考",
+        tool: "工具执行",
+        verify: "校验结果",
+        done: "保存进度",
+        final: "最终回复",
+        error: "遇到问题",
+        cancelled: "已停止",
+      };
+      const stage = event.stage || event.type || "event";
+      return {
+        id: `live-${event.seq || Date.now()}-${stage}`,
+        kind: stage,
+        title: labels[stage] || stage,
+        status: stage === "error" ? "error" : stage === "final" ? "done" : "running",
+        summary: event.message || event.detail || "",
+        collapsed: stage === "tool",
+        details: event,
+      };
+    }
+
+    function appendRunEvent(event) {
+      const card = formatRunEvent(event);
+      if (!liveRunEvents.some(item => item.id === card.id)) liveRunEvents.push(card);
+      if (liveRunEvents.length > 80) liveRunEvents.shift();
+      renderRunTimeline();
+    }
+
+    function handleConversationEvent(event) {
+      appendRunEvent(event);
+      if (event.stage === "tool") {
+        appendConversation("tool", event);
+        return;
+      }
+      if (event.stage === "final") {
+        appendConversation("ming", event.detail || event.message);
+        setChatRunning(false, "ready");
+        loadState();
+        return;
+      }
+      if (event.stage === "error") {
+        appendConversation("notice", event.detail || event.message);
+        setChatRunning(false, "error");
+        loadState();
+        return;
+      }
+      if (event.stage === "cancelled") {
+        appendConversation("notice", event.message);
+        setChatRunning(false, "cancelled");
+        loadState();
+      }
+    }
+
+    function connectLiveEvents() {
+      const status = document.getElementById("liveStatus");
+      const source = new EventSource("/api/events");
+      const stages = ["submitted", "context", "route", "llm", "tool", "verify", "done", "final", "error", "cancelled", "heartbeat"];
+      source.onopen = () => { status.textContent = "connected"; };
+      source.onerror = () => { status.textContent = "reconnecting"; };
+      for (const stage of stages) {
+        source.addEventListener(stage, event => {
+          if (!event.data) return;
+          let payload;
+          try {
+            payload = JSON.parse(event.data);
+          } catch {
+            return;
+          }
+          if (payload.stage !== "heartbeat") {
+            appendLiveEvent(payload);
+            handleConversationEvent(payload);
+          }
+        });
+      }
+    }
+
+    function appendLiveEvent(event) {
+      liveEvents.unshift(event);
+      if (liveEvents.length > 20) liveEvents.pop();
+      renderLiveEvents();
+    }
+
+    function renderLiveEvents() {
+      const root = document.getElementById("liveEvents");
+      root.innerHTML = "";
+      if (!liveEvents.length) {
+        root.innerHTML = `<div class="subtle">等待下一条 live event。</div>`;
+        return;
+      }
+      for (const event of liveEvents) {
+        const node = document.createElement("div");
+        node.className = "live-event";
+        node.innerHTML =
+          `<strong>${escapeHtml(event.stage)} · ${escapeHtml(event.message)}</strong>` +
+          `<div class="subtle">${escapeHtml(event.turn_id || "no turn")} · #${escapeHtml(event.seq)}</div>`;
+        root.appendChild(node);
+      }
+    }
+
+    function openModal(tabName) {
+      modal.classList.add("open");
+      setTab(tabName || "timeline");
+    }
+
+    function setTab(tabName) {
+      tabButtons.forEach(b => b.classList.toggle("active", b.dataset.tab === tabName));
+      panels.forEach(p => p.classList.toggle("hidden", p.dataset.panel !== tabName));
+    }
+
+    function escapeHtml(value) {
+      return text(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function text(value) {
+      return value === undefined || value === null ? "" : String(value);
+    }
+
+    document.getElementById("toggleSidebar").addEventListener("click", () => {
+      appShell.classList.toggle("sidebar-open");
+      document.getElementById("toggleSidebar").classList.toggle("active", appShell.classList.contains("sidebar-open"));
+    });
+    document.getElementById("toggleProcess").addEventListener("click", event => {
+      event.stopPropagation();
+      appShell.classList.toggle("process-closed");
+      document.getElementById("toggleProcess").classList.toggle("active", !appShell.classList.contains("process-closed"));
+    });
+    document.querySelectorAll("[data-modal]").forEach(btn => {
+      btn.addEventListener("click", () => openModal(btn.dataset.modal));
+    });
+    tabButtons.forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+    closeModal.addEventListener("click", () => modal.classList.remove("open"));
+    modal.addEventListener("click", event => { if (event.target === modal) modal.classList.remove("open"); });
+    window.addEventListener("keydown", event => { if (event.key === "Escape") modal.classList.remove("open"); });
+    document.getElementById("messageInput").addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById("chatForm").requestSubmit();
+      }
+    });
+    document.getElementById("chatForm").addEventListener("submit", submitChat);
+    document.getElementById("stopTurnBtn").addEventListener("click", stopTurn);
+    renderConversation();
+    renderLiveEvents();
+    connectLiveEvents();
+    loadState();
+    setInterval(loadState, 1800);
+  </script>
+</body>
+</html>
+"""
 
 
 class TraceConsoleState:
@@ -399,7 +1599,7 @@ class TraceConsoleApp:
         return json.dumps(self.state(), ensure_ascii=False, indent=2)
 
     def render_index(self) -> str:
-        return INDEX_HTML
+        return DEMO_INDEX_HTML
 
     def chat_runtime(self):
         if self._chat_runtime is None:
@@ -555,702 +1755,3 @@ class TraceConsoleApp:
             print("\nMing Agent Workbench stopped.")
         finally:
             server.server_close()
-
-
-INDEX_HTML = """<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ming Agent Workbench</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f5f6f8;
-      --panel: #ffffff;
-      --line: #d8dee8;
-      --text: #182230;
-      --muted: #667085;
-      --brand: #0f766e;
-      --brand-weak: #ecfdf5;
-      --attention: #b42318;
-      --warn: #b54708;
-      --ok: #067647;
-      --focus: #175cd3;
-      --shadow: 0 12px 32px rgba(16, 24, 40, .07);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      letter-spacing: 0;
-    }
-    button, textarea { font: inherit; }
-    button {
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--text);
-      border-radius: 6px;
-      min-height: 34px;
-      padding: 7px 10px;
-      cursor: pointer;
-    }
-    button.icon { width: 36px; padding: 0; display: inline-grid; place-items: center; }
-    button.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
-    button:disabled { opacity: .5; cursor: not-allowed; }
-    .topbar {
-      height: 58px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 0 16px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, .96);
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }
-    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .brand h1 { margin: 0; font-size: 17px; line-height: 1.2; }
-    .meta, .muted { color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-    .top-actions { display: flex; align-items: center; gap: 8px; }
-    .state-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 10px;
-      background: #fff;
-      font-size: 12px;
-      white-space: nowrap;
-    }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-    .dot.running { background: var(--focus); }
-    .dot.completed { background: var(--ok); }
-    .dot.blocked { background: var(--attention); }
-    .app-shell {
-      display: grid;
-      grid-template-columns: 52px minmax(0, 1fr) minmax(320px, 390px);
-      min-height: calc(100vh - 58px);
-    }
-    .session-rail, .process-rail {
-      border-right: 1px solid var(--line);
-      background: #fff;
-      min-width: 0;
-    }
-    .session-rail {
-      overflow: hidden;
-      transition: width .16s ease;
-    }
-    .session-rail.expanded { width: 260px; }
-    .session-rail:not(.expanded) .rail-body { display: none; }
-    .rail-toolbar {
-      height: 52px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-bottom: 1px solid var(--line);
-    }
-    .rail-body { padding: 12px; }
-    .session-item {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 9px;
-      margin-bottom: 8px;
-      background: #fff;
-    }
-    .workspace {
-      min-width: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
-      padding: 14px;
-      gap: 12px;
-    }
-    .task-strip {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: var(--shadow);
-      padding: 12px;
-    }
-    .task-title { font-weight: 700; margin-bottom: 5px; }
-    .conversation {
-      display: grid;
-      gap: 10px;
-      overflow: auto;
-      min-height: 260px;
-      padding: 2px 2px 8px;
-    }
-    .message {
-      max-width: 860px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      padding: 10px 12px;
-      line-height: 1.55;
-      font-size: 14px;
-      overflow-wrap: anywhere;
-    }
-    .message.user { justify-self: end; background: #f0fdfa; border-color: #99f6e4; }
-    .message.assistant { justify-self: start; background: #eff6ff; border-color: #bfdbfe; }
-    .message.event, .message.system { justify-self: center; color: var(--muted); font-size: 12px; }
-    .composer {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-      box-shadow: var(--shadow);
-      padding: 10px;
-    }
-    textarea {
-      width: 100%;
-      min-height: 74px;
-      max-height: 220px;
-      resize: vertical;
-      border: 0;
-      outline: none;
-      line-height: 1.5;
-    }
-    .composer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); padding-top: 9px; }
-    .process-rail {
-      border-right: 0;
-      border-left: 1px solid var(--line);
-      padding: 14px;
-      overflow: auto;
-    }
-    .panel-block { margin-bottom: 14px; }
-    .panel-title { font-size: 13px; font-weight: 700; margin: 0 0 8px; }
-    .todo-item {
-      display: grid;
-      grid-template-columns: 18px 1fr;
-      gap: 8px;
-      align-items: start;
-      margin-bottom: 8px;
-      font-size: 13px;
-      line-height: 1.45;
-    }
-    .check {
-      width: 16px;
-      height: 16px;
-      border-radius: 4px;
-      border: 1px solid var(--line);
-      background: #fff;
-      display: inline-grid;
-      place-items: center;
-      color: #fff;
-      font-size: 11px;
-    }
-    .check.completed { background: var(--ok); border-color: var(--ok); }
-    .check.in_progress { background: var(--warn); border-color: var(--warn); }
-    .progress-list { display: grid; gap: 9px; }
-    .progress-card {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
-      background: #fff;
-    }
-    .progress-card.active { border-color: var(--brand); background: var(--brand-weak); }
-    .progress-card.notice { border-color: #fda29b; background: #fffafa; }
-    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .card-title { font-size: 13px; font-weight: 700; }
-    .pill { border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
-    .summary { margin-top: 7px; color: #344054; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-    .tool-details { display: none; margin-top: 8px; }
-    .progress-card.expanded .tool-details { display: block; }
-    .subagent { border: 1px solid var(--line); border-radius: 8px; padding: 9px; margin-bottom: 8px; background: #fff; }
-    .subagent-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; font-size: 13px; }
-    .live-events { display: grid; gap: 8px; max-height: 180px; overflow: auto; }
-    .live-event { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; font-size: 12px; line-height: 1.45; }
-    .live-event.error, .live-event.cancelled { border-color: #fda29b; }
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      background: #101828;
-      color: #e5e7eb;
-      padding: 10px;
-      border-radius: 8px;
-      font-size: 12px;
-      max-height: 240px;
-      overflow: auto;
-    }
-    .modal {
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 23, 42, .34);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 22px;
-      z-index: 20;
-    }
-    .modal.open { display: flex; }
-    .modal-panel {
-      width: min(920px, 100%);
-      max-height: 86vh;
-      overflow: hidden;
-      background: #fff;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: 0 24px 70px rgba(16, 24, 40, .18);
-      display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
-    }
-    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border-bottom: 1px solid var(--line); }
-    .tabs { display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); overflow: auto; }
-    .tab.active { background: var(--brand); border-color: var(--brand); color: #fff; }
-    .modal-body { padding: 14px; overflow: auto; }
-    @media (max-width: 1060px) {
-      .app-shell { grid-template-columns: 1fr; }
-      .session-rail { display: none; }
-      .process-rail { border-left: 0; border-top: 1px solid var(--line); }
-    }
-  </style>
-</head>
-<body>
-  <header class="topbar">
-    <div class="brand">
-      <button class="icon" id="toggleSessionsBtn" type="button" title="会话列表">☰</button>
-      <div>
-        <h1>Ming Agent Workbench</h1>
-        <div class="meta">Ming 任务工作台 · Ming 的判断分歧只在需要人类裁决时展示</div>
-        <div class="meta" id="workspace"></div>
-      </div>
-    </div>
-    <div class="top-actions">
-      <span class="state-pill"><span class="dot" id="stateDot"></span><span id="stateText">loading</span></span>
-      <button class="icon" id="brainBtn" type="button" title="查看大脑详情">◎</button>
-      <button class="icon" id="processBtn" type="button" title="过程面板">▣</button>
-      <button class="icon" id="settingsBtn" type="button" title="设置与模型">⚙</button>
-      <button id="refreshBtn" type="button">刷新</button>
-    </div>
-  </header>
-
-  <main class="app-shell">
-    <aside class="session-rail" id="sessionRail">
-      <div class="rail-toolbar"><button class="icon" type="button" id="newChatBtn" title="新会话">＋</button></div>
-      <div class="rail-body">
-        <div class="panel-title">会话</div>
-        <div id="sessionList"></div>
-      </div>
-    </aside>
-
-    <section class="workspace" id="mainWorkspace">
-      <div class="task-strip">
-        <div class="task-title" id="taskText">暂无任务</div>
-        <div class="meta" id="taskMeta"></div>
-      </div>
-      <div class="conversation" id="conversation"></div>
-      <form class="composer" id="chatForm">
-        <textarea id="messageInput" name="message" placeholder="输入任务，Ming 会在本地运行。Enter 发送，Shift+Enter 换行。"></textarea>
-        <div class="composer-actions">
-          <span class="meta" id="chatStatus">ready</span>
-          <button class="primary" id="sendBtn" type="submit">发送</button>
-          <button id="stopTurnBtn" type="button" disabled>停止思考</button>
-        </div>
-      </form>
-    </section>
-
-    <aside class="process-rail" id="processRail">
-      <section class="panel-block">
-        <p class="panel-title">Agent 状态</p>
-        <div class="summary" id="agentSummary"></div>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">执行过程</p>
-        <div class="progress-list" id="runTimeline"></div>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">TODO</p>
-        <div id="todoList"></div>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">Artifacts</p>
-        <pre id="artifacts"></pre>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">Context / Token</p>
-        <pre id="contextPanel"></pre>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">可公开思考摘要</p>
-        <div class="summary" id="thoughtSummary"></div>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">Subagents</p>
-        <div id="subagents"></div>
-      </section>
-      <section class="panel-block">
-        <p class="panel-title">SSE 实时事件</p>
-        <div class="meta" id="liveStatus">connecting</div>
-        <div class="live-events" id="liveEvents"></div>
-      </section>
-    </aside>
-  </main>
-
-  <div class="modal" id="brainModal" role="dialog" aria-modal="true">
-    <div class="modal-panel">
-      <div class="modal-head">
-        <strong>诊断详情</strong>
-        <button id="closeModalBtn" type="button">关闭</button>
-      </div>
-      <div class="tabs">
-        <button class="tab active" data-tab="timeline" type="button">做了什么</button>
-        <button class="tab" data-tab="exception" type="button">异常原因</button>
-        <button class="tab" data-tab="session_trace" type="button">SessionTrace</button>
-        <button class="tab" data-tab="settings" type="button">设置与模型</button>
-      </div>
-      <div class="modal-body"><pre id="details">点击执行过程中的步骤，查看结构化详情。</pre></div>
-    </div>
-  </div>
-
-  <script>
-    let selectedId = "";
-    let stateTimeline = [];
-    let traceTabs = {};
-    const conversation = [];
-    const liveEvents = [];
-    const liveRunEvents = [];
-
-    async function loadState() {
-      const response = await fetch("/api/state", { cache: "no-store" });
-      const state = await response.json();
-      render(state);
-    }
-
-    function render(state) {
-      document.getElementById("workspace").textContent = state.workspace;
-      document.getElementById("taskText").textContent = state.current_task.text;
-      document.getElementById("taskMeta").textContent =
-        `${state.current_task.turn_id || "no turn"} · ${state.current_task.started_at || "no time"}`;
-      document.getElementById("stateText").textContent = `${state.agent.state} · ${state.agent.mode}`;
-      const dot = document.getElementById("stateDot");
-      dot.className = `dot ${state.agent.state}`;
-      document.getElementById("agentSummary").textContent = state.agent.summary;
-      document.getElementById("thoughtSummary").textContent = state.agent.thought_summary;
-      stateTimeline = state.timeline || [];
-      traceTabs = state.trace_tabs || {};
-      renderSessions(state.sessions || []);
-      renderTodo((state.process_panel && state.process_panel.todo.items) || (state.todo && state.todo.items) || []);
-      renderRunTimeline();
-      renderSubagents(state.subagents || []);
-      renderArtifacts((state.process_panel && state.process_panel.artifacts) || state.artifacts || {});
-      renderContext((state.process_panel && state.process_panel.context) || {});
-    }
-
-    function renderSessions(sessions) {
-      const root = document.getElementById("sessionList");
-      root.innerHTML = "";
-      if (!sessions.length) {
-        root.innerHTML = `<div class="muted">暂无历史会话</div>`;
-        return;
-      }
-      for (const session of sessions) {
-        const node = document.createElement("div");
-        node.className = "session-item";
-        node.innerHTML =
-          `<strong>${escapeHtml(session.title)}</strong>` +
-          `<div class="meta">${escapeHtml(session.turn_id)} · ${escapeHtml(session.status)}</div>`;
-        root.appendChild(node);
-      }
-    }
-
-    function renderTodo(items) {
-      const root = document.getElementById("todoList");
-      root.innerHTML = "";
-      if (!items.length) {
-        root.innerHTML = `<div class="muted">暂无 TODO</div>`;
-        return;
-      }
-      for (const item of items) {
-        const row = document.createElement("div");
-        row.className = "todo-item";
-        row.innerHTML =
-          `<span class="check ${escapeHtml(item.status)}">${item.status === "completed" ? "✓" : ""}</span>` +
-          `<span>${escapeHtml(item.text)}<br><span class="muted">${escapeHtml(item.status)}</span></span>`;
-        root.appendChild(row);
-      }
-    }
-
-    function renderRunTimeline(cards) {
-      const root = document.getElementById("runTimeline");
-      const data = cards || (liveRunEvents.length ? liveRunEvents : stateTimeline);
-      root.innerHTML = "";
-      for (const card of data) {
-        root.appendChild(renderProgressCard(card, data));
-      }
-    }
-
-    function renderProgressCard(card, allCards) {
-      const node = document.createElement("article");
-      node.className = `progress-card ${card.kind === "notice" ? "notice" : ""} ${selectedId === card.id ? "active" : ""}`;
-      node.dataset.cardId = card.id;
-      node.innerHTML =
-        `<div class="card-head"><span class="card-title">${escapeHtml(card.title)}</span>` +
-        `<button class="pill" type="button">${escapeHtml(card.kind)} · ${escapeHtml(card.status)}</button></div>` +
-        `<div class="summary">${escapeHtml(card.summary)}</div>` +
-        `<pre class="tool-details">${escapeHtml(JSON.stringify(card.details || {}, null, 2))}</pre>`;
-      node.addEventListener("click", () => {
-        selectedId = card.id;
-        document.getElementById("brainModal").classList.add("open");
-        document.getElementById("details").textContent = JSON.stringify(card.details || {}, null, 2);
-        if (card.kind === "tool" || card.collapsed) {
-          toggleToolCard(node);
-        }
-        renderRunTimeline(allCards);
-      });
-      return node;
-    }
-
-    function toggleToolCard(node) {
-      node.classList.toggle("expanded");
-    }
-
-    function renderSubagents(agents) {
-      const root = document.getElementById("subagents");
-      root.innerHTML = "";
-      for (const agent of agents) {
-        const lane = document.createElement("div");
-        lane.className = "subagent";
-        lane.innerHTML =
-          `<div class="subagent-head"><span>${escapeHtml(agent.name)}</span><span class="pill">${escapeHtml(agent.status)}</span></div>` +
-          `<div class="meta">${escapeHtml(agent.role)}</div>` +
-          `<div class="summary">${escapeHtml(agent.summary)}</div>`;
-        root.appendChild(lane);
-      }
-    }
-
-    function renderArtifacts(artifacts) {
-      document.getElementById("artifacts").textContent = JSON.stringify(artifacts, null, 2);
-    }
-
-    function renderContext(context) {
-      document.getElementById("contextPanel").textContent = JSON.stringify(context, null, 2);
-    }
-
-    async function submitChat(event) {
-      event.preventDefault();
-      const input = document.getElementById("messageInput");
-      const message = input.value.trim();
-      if (!message) return;
-      appendConversation("user", message);
-      setChatRunning(true, "submitting");
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      const payload = await response.json();
-      if (response.status === 202) {
-        input.value = "";
-        setChatRunning(true, `running ${payload.turn_id}`);
-        appendConversation("event", `turn ${payload.turn_id} started`);
-      } else {
-        setChatRunning(false, payload.status || "error");
-        appendConversation("system", payload.error || payload.status || "submit failed");
-      }
-    }
-
-    async function stopTurn() {
-      setChatRunning(true, "stopping");
-      const response = await fetch("/api/turns/current/stop", { method: "POST" });
-      const payload = await response.json();
-      if (response.status === 200) {
-        appendConversation("system", "已停止本轮思考");
-      }
-      setChatRunning(false, payload.status || "idle");
-    }
-
-    function setChatRunning(running, label) {
-      document.getElementById("chatStatus").textContent = label;
-      document.getElementById("sendBtn").disabled = running;
-      document.getElementById("stopTurnBtn").disabled = !running;
-    }
-
-    function appendConversation(role, content) {
-      conversation.push({ role, content });
-      if (conversation.length > 80) conversation.shift();
-      renderConversation();
-    }
-
-    function renderConversation() {
-      const root = document.getElementById("conversation");
-      root.innerHTML = "";
-      if (!conversation.length) {
-        root.innerHTML = `<div class="message system">等待输入任务。</div>`;
-        return;
-      }
-      for (const item of conversation) {
-        const node = document.createElement("div");
-        node.className = `message ${escapeHtml(item.role)}`;
-        node.textContent = item.content;
-        root.appendChild(node);
-      }
-      root.scrollTop = root.scrollHeight;
-    }
-
-    function formatRunEvent(event) {
-      const labels = {
-        submitted: "收到任务",
-        context: "整理上下文",
-        route: "选择策略",
-        llm: "模型思考",
-        tool: "工具执行",
-        verify: "校验结果",
-        done: "保存进度",
-        final: "最终回复",
-        error: "遇到问题",
-        cancelled: "已停止",
-      };
-      const stage = event.stage || event.type || "event";
-      return {
-        id: `live-${event.seq || Date.now()}-${stage}`,
-        kind: stage,
-        title: labels[stage] || stage,
-        status: stage === "error" ? "needs_attention" : stage === "final" ? "done" : "running",
-        summary: event.message || event.detail || "",
-        collapsed: stage === "tool",
-        details: event,
-      };
-    }
-
-    function appendRunEvent(event) {
-      const card = formatRunEvent(event);
-      if (!liveRunEvents.some(item => item.id === card.id)) liveRunEvents.push(card);
-      if (liveRunEvents.length > 80) liveRunEvents.shift();
-      renderRunTimeline();
-    }
-
-    function handleConversationEvent(event) {
-      appendRunEvent(event);
-      if (event.stage === "submitted") {
-        appendConversation("event", `收到任务：${event.message}`);
-        return;
-      }
-      if (event.stage === "final") {
-        appendConversation("assistant", event.detail || event.message);
-        setChatRunning(false, "ready");
-        loadState();
-        return;
-      }
-      if (event.stage === "error") {
-        appendConversation("system", event.detail || event.message);
-        setChatRunning(false, "error");
-        loadState();
-        return;
-      }
-      if (event.stage === "cancelled") {
-        appendConversation("system", event.message);
-        setChatRunning(false, "cancelled");
-        loadState();
-        return;
-      }
-      if (["context", "route", "llm", "tool", "verify", "done"].includes(event.stage)) {
-        const card = formatRunEvent(event);
-        appendConversation("event", `${card.title}：${event.message}`);
-        if (event.stage === "done") loadState();
-      }
-    }
-
-    function connectLiveEvents() {
-      const status = document.getElementById("liveStatus");
-      const source = new EventSource("/api/events");
-      const stages = ["submitted", "context", "route", "llm", "tool", "verify", "done", "final", "error", "cancelled", "heartbeat"];
-      source.onopen = () => { status.textContent = "connected"; };
-      source.onerror = () => { status.textContent = "reconnecting"; };
-      for (const stage of stages) {
-        source.addEventListener(stage, event => {
-          const payload = JSON.parse(event.data);
-          if (payload.stage !== "heartbeat") {
-            appendLiveEvent(payload);
-            handleConversationEvent(payload);
-          }
-        });
-      }
-    }
-
-    function appendLiveEvent(event) {
-      liveEvents.unshift(event);
-      if (liveEvents.length > 20) liveEvents.pop();
-      renderLiveEvents();
-    }
-
-    function renderLiveEvents() {
-      const root = document.getElementById("liveEvents");
-      root.innerHTML = "";
-      if (!liveEvents.length) {
-        root.innerHTML = `<div class="muted">等待下一条 live event。</div>`;
-        return;
-      }
-      for (const event of liveEvents) {
-        const node = document.createElement("div");
-        node.className = `live-event ${escapeHtml(event.stage)}`;
-        node.innerHTML =
-          `<strong>${escapeHtml(event.stage)} · ${escapeHtml(event.message)}</strong>` +
-          `<div class="meta">${escapeHtml(event.turn_id || "no turn")} · #${escapeHtml(event.seq)}</div>` +
-          (event.detail ? `<div class="meta">${escapeHtml(event.detail)}</div>` : "");
-        root.appendChild(node);
-      }
-    }
-
-    function activateTab(tabName) {
-      document.querySelectorAll(".tab").forEach(tab => {
-        tab.classList.toggle("active", tab.dataset.tab === tabName);
-      });
-      document.getElementById("details").textContent =
-        JSON.stringify((traceTabs && traceTabs[tabName]) || {}, null, 2);
-    }
-
-    function escapeHtml(value) {
-      return text(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;");
-    }
-
-    function text(value) {
-      return value === undefined || value === null ? "" : String(value);
-    }
-
-    document.getElementById("toggleSessionsBtn").addEventListener("click", () => {
-      document.getElementById("sessionRail").classList.toggle("expanded");
-    });
-    document.getElementById("processBtn").addEventListener("click", () => {
-      document.getElementById("processRail").hidden = !document.getElementById("processRail").hidden;
-    });
-    document.getElementById("brainBtn").addEventListener("click", () => {
-      document.getElementById("brainModal").classList.add("open");
-      activateTab("timeline");
-    });
-    document.getElementById("settingsBtn").addEventListener("click", () => {
-      document.getElementById("brainModal").classList.add("open");
-      activateTab("settings");
-    });
-    document.getElementById("closeModalBtn").addEventListener("click", () => {
-      document.getElementById("brainModal").classList.remove("open");
-    });
-    document.querySelectorAll(".tab").forEach(tab => {
-      tab.addEventListener("click", () => activateTab(tab.dataset.tab));
-    });
-    document.getElementById("messageInput").addEventListener("keydown", event => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        document.getElementById("chatForm").requestSubmit();
-      }
-    });
-    document.getElementById("refreshBtn").addEventListener("click", loadState);
-    document.getElementById("chatForm").addEventListener("submit", submitChat);
-    document.getElementById("stopTurnBtn").addEventListener("click", stopTurn);
-    renderConversation();
-    renderLiveEvents();
-    connectLiveEvents();
-    loadState();
-    setInterval(loadState, 1800);
-  </script>
-</body>
-</html>
-"""

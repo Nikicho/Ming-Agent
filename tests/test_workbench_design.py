@@ -8,18 +8,33 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     html = TraceConsoleApp(tmp_path).render_index()
 
     assert "Ming Agent Workbench" in html
+    assert 'id="appShell"' in html
     assert 'id="sessionRail"' in html
     assert 'id="mainWorkspace"' in html
     assert 'id="processRail"' in html
-    assert 'id="brainModal"' in html
+    assert 'id="detailModal"' in html
     assert "做了什么" in html
     assert "异常原因" in html
     assert "SessionTrace" in html
     assert "设置与模型" in html
+    assert "app-shell sidebar-open" not in html
+    assert "app-shell" in html
+    assert "panel session-rail" in html
+    assert "panel main-workspace" in html
+    assert "panel process-rail" in html
+    assert "composer-box" in html
+    assert "tool-card" in html
+    assert "notice" in html
+    assert "verdict-card" in html
+    assert "modal-backdrop" in html
     assert "EventSource" in html
     assert "renderProgressCard" in html
+    assert "renderConversationItem" in html
     assert "toggleToolCard" in html
-    assert "Ming 的判断分歧" in html
+    assert "openModal" in html
+    assert "setTab" in html
+    assert "Ming 暂停了" in html
+    assert "需要你的判断" in html
     assert "停止思考" in html
 
 
