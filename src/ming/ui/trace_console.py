@@ -1079,6 +1079,9 @@ DEMO_INDEX_HTML = """<!doctype html>
     const conversation = [];
     const liveEvents = [];
     const liveRunEvents = [];
+    let allSessions = [];
+    let currentConversationMode = "live";
+    let selectedSessionId = "";
     let activeThinkingId = "";
     let stateTimeline = [];
     let traceTabs = {};
@@ -1099,7 +1102,8 @@ DEMO_INDEX_HTML = """<!doctype html>
       document.getElementById("stateText").textContent = `${state.agent.state} · ${state.agent.mode}`;
       stateTimeline = state.timeline || [];
       traceTabs = state.trace_tabs || {};
-      renderSessions(state.sessions || []);
+      allSessions = state.sessions || [];
+      renderSessions(allSessions);
       renderTodo((state.process_panel && state.process_panel.todo.items) || []);
       renderArtifacts((state.process_panel && state.process_panel.artifacts) || {});
       renderMetrics((state.process_panel && state.process_panel.context) || {});
@@ -1117,11 +1121,16 @@ DEMO_INDEX_HTML = """<!doctype html>
       }
       for (const [index, session] of sessions.entries()) {
         const node = document.createElement("button");
-        node.className = `session-item ${index === 0 ? "active" : ""}`;
+        const isActive = selectedSessionId
+          ? session.turn_id === selectedSessionId
+          : index === 0 && currentConversationMode === "live";
+        node.className = `session-item ${isActive ? "active" : ""}`;
         node.type = "button";
+        node.dataset.turnId = session.turn_id || "";
         node.innerHTML =
           `<div class="session-title">${escapeHtml(session.title)}</div>` +
-          `<div class="session-meta"><span>${escapeHtml(session.started_at || "")}</span><strong>${escapeHtml(session.status)}</strong></div>`;
+          `<div class="session-meta"><span>${escapeHtml(session.started_at || "")}</span></div>`;
+        node.addEventListener("click", () => selectSession(session.turn_id || ""));
         root.appendChild(node);
       }
     }
@@ -1453,6 +1462,10 @@ DEMO_INDEX_HTML = """<!doctype html>
     function renderConversation() {
       const root = document.getElementById("conversation");
       root.innerHTML = "";
+      if (currentConversationMode === "history") {
+        renderHistoryConversation(root);
+        return;
+      }
       if (!conversation.length) {
         conversation.push({ role: "ming", content: "有什么需要思考或解决的问题吗？我们可以一起梳理。" });
       }
@@ -1461,6 +1474,49 @@ DEMO_INDEX_HTML = """<!doctype html>
         if (node) root.appendChild(node);
       }
       root.scrollTop = root.scrollHeight;
+    }
+
+    function renderHistoryConversation(root) {
+      const session = allSessions.find(item => item.turn_id === selectedSessionId);
+      if (!session) {
+        root.innerHTML = `<section class="notice"><div class="notice-title">历史会话不存在</div><p>这条记录可能已经被清理。</p></section>`;
+        return;
+      }
+      const header = document.createElement("section");
+      header.className = "notice";
+      header.innerHTML =
+        `<div class="notice-title">正在查看历史会话</div>` +
+        `<p>${escapeHtml(session.title || "未命名会话")}<br><span class="subtle">${escapeHtml(session.started_at || "")}</span></p>`;
+      root.appendChild(header);
+      const items = session.conversation || [];
+      if (!items.length) {
+        const empty = document.createElement("section");
+        empty.className = "notice";
+        empty.innerHTML = `<div class="notice-title">暂无可展示消息</div><p>该 checkpoint 没有保存对话正文。</p>`;
+        root.appendChild(empty);
+      }
+      for (const item of items) {
+        const node = renderConversationItem(item);
+        if (node) root.appendChild(node);
+      }
+      root.scrollTop = root.scrollHeight;
+    }
+
+    function selectSession(turnId) {
+      const session = allSessions.find(item => item.turn_id === turnId);
+      if (!session) return;
+      selectedSessionId = turnId;
+      currentConversationMode = "history";
+      renderSessions(allSessions);
+      renderConversation();
+    }
+
+    function switchToLiveConversation() {
+      if (currentConversationMode === "live") return;
+      currentConversationMode = "live";
+      selectedSessionId = "";
+      renderSessions(allSessions);
+      renderConversation();
     }
 
     function appendConversation(role, content) {
@@ -1499,6 +1555,7 @@ DEMO_INDEX_HTML = """<!doctype html>
       const input = document.getElementById("messageInput");
       const message = input.value.trim();
       if (!message) return;
+      switchToLiveConversation();
       appendConversation("user", message);
       beginThinking("已收到消息，正在整理上下文、选择工具和执行路径。");
       setChatRunning(true, "submitting");
@@ -1741,7 +1798,7 @@ class TraceConsoleState:
         task_text = turn.get("user_input") or checkpoint.get("name") or "暂无任务"
         state = self._agent_state(turn)
         timeline = self._build_timeline(turn)
-        sessions = self._build_sessions(session, checkpoint)
+        sessions = self._build_sessions(session, checkpoint, checkpoint_path)
         artifacts = self._build_artifacts(session_trace_path, checkpoint_path, checkpoint)
         context = self._build_context(session, turn, artifacts, checkpoint)
         config_snapshot = self._build_config_snapshot()
@@ -1789,27 +1846,158 @@ class TraceConsoleState:
         self,
         session: dict[str, Any],
         checkpoint: dict[str, Any],
+        checkpoint_path: Path | None,
     ) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
+        rows_by_turn: dict[str, dict[str, Any]] = {}
+        checkpoint_paths = sorted(
+            self.ming_root.glob("checkpoints/*/checkpoint.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+        for path in checkpoint_paths[-24:]:
+            payload = self._read_json(path)
+            turn_id = payload.get("turn_id", "")
+            if not turn_id:
+                continue
+            title = self._public_title_from_checkpoint(payload)
+            rows_by_turn[turn_id] = {
+                "turn_id": turn_id,
+                "title": self._shorten(title or turn_id or "未命名会话", 48),
+                "started_at": payload.get("created_at", ""),
+                "checkpoint_path": self._path_text(path),
+                "conversation": self._conversation_from_checkpoint(payload),
+            }
         for turn in session.get("turns") or []:
-            rows.append(
-                {
-                    "turn_id": turn.get("turn_id", ""),
-                    "title": self._shorten(turn.get("user_input", "") or "未命名会话", 48),
-                    "status": self._agent_state(turn),
-                    "started_at": turn.get("timestamp", ""),
-                }
-            )
-        if not rows and checkpoint:
-            rows.append(
-                {
-                    "turn_id": checkpoint.get("turn_id", ""),
-                    "title": checkpoint.get("name") or checkpoint.get("turn_id") or "未命名会话",
-                    "status": "checkpoint",
-                    "started_at": checkpoint.get("created_at", ""),
-                }
-            )
-        return rows[-12:][::-1]
+            turn_id = turn.get("turn_id", "")
+            if not turn_id or turn_id in rows_by_turn:
+                continue
+            rows_by_turn[turn_id] = {
+                "turn_id": turn_id,
+                "title": self._shorten(turn.get("user_input", "") or "未命名会话", 48),
+                "started_at": turn.get("timestamp", ""),
+                "checkpoint_path": "",
+                "conversation": self._conversation_from_turn(turn),
+            }
+        if not rows_by_turn and checkpoint:
+            turn_id = checkpoint.get("turn_id", "")
+            title = self._public_title_from_checkpoint(checkpoint)
+            rows_by_turn[turn_id] = {
+                "turn_id": turn_id,
+                "title": title or turn_id or "未命名会话",
+                "started_at": checkpoint.get("created_at", ""),
+                "checkpoint_path": self._path_text(checkpoint_path),
+                "conversation": self._conversation_from_checkpoint(checkpoint),
+            }
+        rows = sorted(
+            rows_by_turn.values(),
+            key=lambda item: item.get("started_at", ""),
+        )
+        return rows[-24:][::-1]
+
+    def _public_title_from_checkpoint(self, checkpoint: dict[str, Any]) -> str:
+        messages = checkpoint.get("messages") or []
+        for message in messages:
+            if message.get("role") != "user":
+                continue
+            content = str(message.get("content") or "")
+            if content and not self._is_internal_user_message(content):
+                return content
+        name = str(checkpoint.get("name") or "")
+        if name and not self._is_internal_user_message(name):
+            return name
+        return str(checkpoint.get("messages_summary") or "")
+
+    def _conversation_from_checkpoint(self, checkpoint: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = self._conversation_from_messages(checkpoint.get("messages") or [])
+        title = self._public_title_from_checkpoint(checkpoint)
+        if rows:
+            if title and not self._conversation_starts_with_title(rows, title):
+                rows.insert(0, {"role": "user", "content": self._clip_history_content(title)})
+            return rows
+        if not title:
+            return []
+        return [{"role": "user", "content": self._clip_history_content(title)}]
+
+    def _conversation_starts_with_title(self, rows: list[dict[str, Any]], title: str) -> bool:
+        if not rows:
+            return False
+        first = rows[0]
+        if first.get("role") != "user":
+            return False
+        content = str(first.get("content") or "")
+        normalized_title = " ".join(title.split())
+        normalized_content = " ".join(content.split())
+        return normalized_title in normalized_content or normalized_content in normalized_title
+
+    def _conversation_from_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen_public_user = False
+        for message in messages:
+            role = message.get("role", "")
+            content = str(message.get("content") or "")
+            if role == "user" and content:
+                if self._is_internal_user_message(content):
+                    continue
+                seen_public_user = True
+                rows.append({"role": "user", "content": self._clip_history_content(content)})
+            elif role == "assistant":
+                if not seen_public_user:
+                    continue
+                tool_calls = message.get("tool_calls") or []
+                for call in tool_calls:
+                    function = call.get("function") or {}
+                    rows.append(
+                        {
+                            "role": "tool",
+                            "content": {
+                                "tool": function.get("name") or "tool",
+                                "message": "历史工具调用",
+                                "detail": self._clip_history_content(function.get("arguments") or ""),
+                                "status": "done",
+                            },
+                        }
+                    )
+                if content:
+                    rows.append({"role": "ming", "content": self._clip_history_content(content)})
+            elif role == "tool" and content:
+                if not seen_public_user:
+                    continue
+                rows.append(
+                    {
+                        "role": "tool",
+                        "content": {
+                            "tool": message.get("name") or message.get("tool_call_id") or "tool",
+                            "message": "历史工具结果",
+                            "detail": self._clip_history_content(content),
+                            "status": "done",
+                        },
+                    }
+                )
+        return rows[-40:]
+
+    def _conversation_from_turn(self, turn: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = []
+        user_input = turn.get("user_input", "")
+        final_output = turn.get("final_output", "")
+        if user_input:
+            rows.append({"role": "user", "content": self._clip_history_content(user_input)})
+        if final_output:
+            rows.append({"role": "ming", "content": self._clip_history_content(final_output)})
+        return rows
+
+    def _is_internal_user_message(self, content: str) -> bool:
+        markers = [
+            "工具调用策略失败，需要换一种执行方式继续",
+            "你刚才只给了计划，没有实际使用工具",
+            "T3 核验失败：最终答复与工具证据不一致",
+            "T1 CoVe 自检",
+        ]
+        return any(marker in content for marker in markers)
+
+    def _clip_history_content(self, value: Any, max_chars: int = 6000) -> str:
+        text = str(value)
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 1].rstrip() + "…"
 
     def _build_timeline(self, turn: dict[str, Any]) -> list[dict[str, Any]]:
         if not turn:

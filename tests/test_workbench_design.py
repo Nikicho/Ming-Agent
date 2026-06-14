@@ -105,6 +105,15 @@ def test_workbench_state_exposes_sessions_process_panel_and_trace_tabs(tmp_path)
                 },
                 "notepad_path": str(tmp_path / ".ming" / "scratch" / "turn-1" / "notes.md"),
                 "changed_files": ["pomodoro.html"],
+                "messages": [
+                    {"role": "tool", "content": "pre-user noise", "tool_call_id": "old"},
+                    {"role": "assistant", "content": "", "tool_calls": []},
+                    {
+                        "role": "user",
+                        "content": "工具调用策略失败，需要换一种执行方式继续，不要把问题交给用户。",
+                    },
+                    {"role": "assistant", "content": "已创建番茄钟页面"},
+                ],
                 "messages_summary": "user: 创建番茄钟页面",
             },
             ensure_ascii=False,
@@ -117,6 +126,18 @@ def test_workbench_state_exposes_sessions_process_panel_and_trace_tabs(tmp_path)
     assert state["schema_version"] == "ming-workbench-v1"
     assert state["sessions"][0]["turn_id"] == "turn-1"
     assert state["sessions"][0]["title"] == "创建番茄钟页面"
+    assert "status" not in state["sessions"][0]
+    assert state["sessions"][0]["conversation"][0]["role"] == "user"
+    assert state["sessions"][0]["conversation"][0]["content"] == "创建番茄钟页面"
+    assert "pre-user noise" not in json.dumps(
+        state["sessions"][0]["conversation"],
+        ensure_ascii=False,
+    )
+    assert all(
+        "工具调用策略失败" not in item.get("content", "")
+        for item in state["sessions"][0]["conversation"]
+        if isinstance(item.get("content"), str)
+    )
     assert state["process_panel"]["todo"]["items"][1]["status"] == "in_progress"
     assert state["process_panel"]["artifacts"]["changed_files"] == ["pomodoro.html"]
     assert state["process_panel"]["context"]["session_trace_path"] == str(trace_path)

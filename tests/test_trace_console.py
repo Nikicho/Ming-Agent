@@ -75,6 +75,9 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "messageInput" in html
     assert "stopTurnBtn" in html
     assert "conversation" in html
+    assert "renderHistoryConversation" in html
+    assert "selectSession" in html
+    assert "currentConversationMode" in html
     assert "任务工作台" in html
     assert "诊断详情" in html
     assert "<span class=\"chip\">DeepSeek</span>" in html
