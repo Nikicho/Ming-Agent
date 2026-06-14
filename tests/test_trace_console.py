@@ -69,15 +69,19 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "/api/state" in html
     assert "EventSource" in html
     assert "/api/events" in html
-    assert "liveEvents" in html
     assert "chatForm" in html
     assert "messageInput" in html
     assert "stopTurnBtn" in html
     assert "conversation" in html
     assert "任务工作台" in html
-    assert "执行过程" in html
     assert "诊断详情" in html
-    assert "runTimeline" in html
+    assert "<span class=\"chip\">DeepSeek</span>" in html
+    assert "&#129504;" in html
+    assert "&#128202;" in html
+    assert "&#9881;" in html
+    assert "SSE 实时事件" not in html
+    assert 'id="runTimeline"' not in html
+    assert 'id="liveEvents"' not in html
     assert "formatRunEvent" in html
     assert "renderRunTimeline" in html
     assert "模型思考" in html

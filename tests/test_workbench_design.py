@@ -27,6 +27,15 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "notice" in html
     assert "verdict-card" in html
     assert "modal-backdrop" in html
+    assert "<span class=\"chip\">DeepSeek</span>" in html
+    assert "&#129504;" in html
+    assert "&#128202;" in html
+    assert "&#9881;" in html
+    assert 'id="toggleProcess" title="切换过程面板 (可锁定)"' in html
+    assert 'icon-button active" type="button" id="toggleProcess"' not in html
+    assert 'id="runTimeline"' not in html
+    assert 'id="liveEvents"' not in html
+    assert "SSE 实时事件" not in html
     assert "EventSource" in html
     assert "renderProgressCard" in html
     assert "renderConversationItem" in html

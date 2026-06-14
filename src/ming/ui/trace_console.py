@@ -758,10 +758,11 @@ DEMO_INDEX_HTML = """<!doctype html>
           <div class="topbar-session" id="taskText">暂无任务</div>
         </div>
         <div class="topbar-right">
-          <span class="chip" id="stateText">loading</span>
-          <button class="icon-button" type="button" data-modal="timeline" title="做了什么">◎</button>
-          <button class="icon-button active" type="button" id="toggleProcess" title="切换过程面板">▣</button>
-          <button class="icon-button" type="button" data-modal="settings" title="设置与模型">⚙</button>
+          <span class="chip">DeepSeek</span>
+          <span class="hidden" id="stateText">loading</span>
+          <button class="icon-button" type="button" data-modal="timeline" title="查看 Ming 的思考过程">&#129504;</button>
+          <button class="icon-button" type="button" id="toggleProcess" title="切换过程面板 (可锁定)">&#128202;</button>
+          <button class="icon-button" type="button" data-modal="settings" title="设置与模型配置">&#9881;</button>
         </div>
       </header>
 
@@ -798,14 +799,6 @@ DEMO_INDEX_HTML = """<!doctype html>
         <section class="side-block">
           <header><div class="section-title">Context</div></header>
           <div class="context-list" id="contextList"></div>
-        </section>
-        <section class="side-block">
-          <header><div class="section-title">执行过程</div></header>
-          <div class="timeline" id="runTimeline"></div>
-        </section>
-        <section class="side-block">
-          <header><div class="section-title">SSE 实时事件</div><span class="subtle" id="liveStatus">connecting</span></header>
-          <div class="live-events" id="liveEvents"></div>
         </section>
       </div>
     </aside>
@@ -948,6 +941,10 @@ DEMO_INDEX_HTML = """<!doctype html>
     function renderRunTimeline(cards) {
       const root = document.getElementById("runTimeline");
       const data = cards || (liveRunEvents.length ? liveRunEvents : stateTimeline);
+      if (!root) {
+        renderTimelinePanel(data);
+        return;
+      }
       root.innerHTML = "";
       if (!data.length) {
         root.innerHTML = `<div class="subtle">暂无执行过程</div>`;
@@ -980,14 +977,14 @@ DEMO_INDEX_HTML = """<!doctype html>
       document.getElementById("settingsPanel").textContent = JSON.stringify(traceTabs.settings || {}, null, 2);
     }
 
-    function renderTimelinePanel() {
+    function renderTimelinePanel(cards) {
       const root = document.getElementById("timelinePanel");
       root.innerHTML = "";
-      const cards = traceTabs.timeline || stateTimeline || [];
-      for (const card of cards) {
+      const data = cards || (liveRunEvents.length ? liveRunEvents : traceTabs.timeline || stateTimeline || []);
+      for (const card of data) {
         root.appendChild(renderProgressCard(card));
       }
-      if (!cards.length) root.innerHTML = `<div class="subtle">暂无记录</div>`;
+      if (!data.length) root.innerHTML = `<div class="subtle">暂无记录</div>`;
     }
 
     function renderExceptionPanel() {
@@ -1161,8 +1158,8 @@ DEMO_INDEX_HTML = """<!doctype html>
       const status = document.getElementById("liveStatus");
       const source = new EventSource("/api/events");
       const stages = ["submitted", "context", "route", "llm", "tool", "verify", "done", "final", "error", "cancelled", "heartbeat"];
-      source.onopen = () => { status.textContent = "connected"; };
-      source.onerror = () => { status.textContent = "reconnecting"; };
+      source.onopen = () => { if (status) status.textContent = "connected"; };
+      source.onerror = () => { if (status) status.textContent = "reconnecting"; };
       for (const stage of stages) {
         source.addEventListener(stage, event => {
           if (!event.data) return;
@@ -1188,6 +1185,7 @@ DEMO_INDEX_HTML = """<!doctype html>
 
     function renderLiveEvents() {
       const root = document.getElementById("liveEvents");
+      if (!root) return;
       root.innerHTML = "";
       if (!liveEvents.length) {
         root.innerHTML = `<div class="subtle">等待下一条 live event。</div>`;
