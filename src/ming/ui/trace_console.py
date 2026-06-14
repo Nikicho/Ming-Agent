@@ -1202,11 +1202,13 @@ DEMO_INDEX_HTML = """<!doctype html>
       node.className = `message ${role}`;
       const content = item.content || "";
       const status = role === "ming" ? classifyReplyStatus(content) : null;
+      const rendered = renderMarkdown(content);
+      if (!rendered.trim() && !status) return null;
       node.innerHTML =
         `<div class="message-label">${role === "user" ? "You" : "Ming"}</div>` +
         `<div class="bubble">` +
         `${status ? `<div class="reply-status ${status.kind}">${escapeHtml(status.label)}</div>` : ""}` +
-        `<div class="bubble-content">${renderMarkdown(content)}</div>` +
+        `<div class="bubble-content">${rendered}</div>` +
         `</div>`;
       return node;
     }
@@ -1241,6 +1243,11 @@ DEMO_INDEX_HTML = """<!doctype html>
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line) {
+          closeParagraph();
+          closeList();
+          continue;
+        }
+        if (isMarkdownSeparator(line)) {
           closeParagraph();
           closeList();
           continue;
@@ -1282,6 +1289,10 @@ DEMO_INDEX_HTML = """<!doctype html>
       return html.join("");
     }
 
+    function isMarkdownSeparator(line) {
+      return /^(-{3,}|\\*{3,}|_{3,})$/.test(line);
+    }
+
     function formatInline(value) {
       return text(value).split(/(`[^`]+`)/g).map(part => {
         if (part.startsWith("`") && part.endsWith("`")) {
@@ -1313,7 +1324,8 @@ DEMO_INDEX_HTML = """<!doctype html>
         conversation.push({ role: "ming", content: "有什么需要思考或解决的问题吗？我们可以一起梳理。" });
       }
       for (const item of conversation) {
-        root.appendChild(renderConversationItem(item));
+        const node = renderConversationItem(item);
+        if (node) root.appendChild(node);
       }
       root.scrollTop = root.scrollHeight;
     }

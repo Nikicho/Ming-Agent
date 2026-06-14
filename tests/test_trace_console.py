@@ -91,6 +91,7 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "formatRunEvent" in html
     assert "renderRunTimeline" in html
     assert "renderMarkdown" in html
+    assert "isMarkdownSeparator" in html
     assert "classifyReplyStatus" in html
     assert "计划说明" in html
     assert "暂无产物" in html
