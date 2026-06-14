@@ -419,6 +419,7 @@ DEMO_INDEX_HTML = """<!doctype html>
     .tool-name { font-weight: 700; color: var(--ink); font-family: var(--mono); font-size: 12px; }
     .tool-status { margin-left: auto; font-size: 11px; }
     .tool-status.ok { color: var(--good); }
+    .tool-status.running { color: var(--accent); }
     .tool-status.error { color: var(--bad); }
     .tool-expand { color: var(--muted); font-size: 12px; margin-left: 4px; }
 
@@ -430,6 +431,100 @@ DEMO_INDEX_HTML = """<!doctype html>
     }
     .tool-card.open .tool-card-body { display: block; }
     .tool-card.open .tool-expand { transform: rotate(180deg); }
+
+    /* ===== Agent Process Cards ===== */
+    .thinking-card,
+    .process-card {
+      justify-self: start;
+      max-width: 82%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(255, 254, 250, .72);
+    }
+    .thinking-card {
+      min-width: 260px;
+      padding: 12px 14px;
+      display: grid;
+      gap: 7px;
+    }
+    .thinking-head,
+    .process-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .thinking-title,
+    .process-title {
+      font-size: 12px;
+      font-weight: 760;
+      color: var(--ink);
+    }
+    .thinking-caption,
+    .process-summary {
+      margin: 0;
+      color: var(--ink-2);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .thinking-dots {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+    }
+    .thinking-dots span {
+      width: 5px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--accent);
+      opacity: .28;
+      animation: mingPulse 1.05s infinite ease-in-out;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: .14s; }
+    .thinking-dots span:nth-child(3) { animation-delay: .28s; }
+    @keyframes mingPulse {
+      0%, 80%, 100% { opacity: .28; transform: translateY(0); }
+      40% { opacity: 1; transform: translateY(-2px); }
+    }
+    .process-card {
+      overflow: hidden;
+    }
+    .process-head {
+      padding: 10px 13px;
+      border-bottom: 1px solid transparent;
+    }
+    .process-card.has-detail .process-head {
+      cursor: pointer;
+    }
+    .process-card.has-detail.open .process-head {
+      border-bottom-color: var(--line);
+    }
+    .process-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(22, 120, 102, .10);
+      flex: 0 0 auto;
+    }
+    .process-card.done .process-dot { background: var(--good); }
+    .process-card.error .process-dot { background: var(--bad); }
+    .process-meta {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .process-body {
+      display: none;
+      padding: 10px 13px 12px;
+      color: var(--ink-2);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .process-card.open .process-body { display: block; }
 
     /* ===== Pause Notice ===== */
     .notice {
@@ -594,7 +689,9 @@ DEMO_INDEX_HTML = """<!doctype html>
     }
 
     .right-scroll {
-      overflow: auto; padding: 12px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px;
       display: grid; gap: 12px; min-height: 0;
     }
 
@@ -627,6 +724,12 @@ DEMO_INDEX_HTML = """<!doctype html>
       grid-template-columns: auto minmax(0, 1fr);
       gap: 9px; align-items: start;
       font-size: 12px; color: var(--ink-2); line-height: 1.45;
+    }
+    .todo-row span:last-child,
+    .artifact-row span:last-child,
+    .context-row span:last-child {
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
 
     .todo-check {
@@ -976,6 +1079,7 @@ DEMO_INDEX_HTML = """<!doctype html>
     const conversation = [];
     const liveEvents = [];
     const liveRunEvents = [];
+    let activeThinkingId = "";
     let stateTimeline = [];
     let traceTabs = {};
     let currentState = {};
@@ -1175,12 +1279,27 @@ DEMO_INDEX_HTML = """<!doctype html>
     }
 
     function renderConversationItem(item) {
+      if (item.role === "thinking") {
+        const node = document.createElement("section");
+        node.className = "thinking-card";
+        node.dataset.id = item.id || "";
+        node.innerHTML =
+          `<div class="thinking-head"><span class="thinking-title">Ming 正在思考</span><span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span></div>` +
+          `<p class="thinking-caption">${escapeHtml(item.content || "正在整理上下文和下一步动作。")}</p>`;
+        return node;
+      }
+      if (item.role === "process") {
+        return renderProcessConversationCard(item.content || {});
+      }
       if (item.role === "tool") {
         const event = item.content || {};
+        const toolName = event.tool || toolNameFromEvent(event) || event.stage || "tool";
+        const status = event.status || "running";
+        const statusLabel = status === "error" ? "异常" : status === "done" ? "完成" : "已发起";
         const node = document.createElement("div");
         node.className = "tool-card";
         node.innerHTML =
-          `<div class="tool-card-head"><span class="tool-icon">🔧</span><span class="tool-name">${escapeHtml(event.tool || event.stage || "tool")}</span><span>${escapeHtml(event.message || "")}</span><span class="tool-status ok">完成</span><span class="tool-expand">▼</span></div>` +
+          `<div class="tool-card-head"><span class="tool-icon">tool</span><span class="tool-name">${escapeHtml(toolName)}</span><span>${escapeHtml(event.message || "")}</span><span class="tool-status ${escapeHtml(status)}">${escapeHtml(statusLabel)}</span><span class="tool-expand">▼</span></div>` +
           `<div class="tool-card-body"><p>${escapeHtml(event.detail || "暂无详情")}</p></div>`;
         node.querySelector(".tool-card-head").addEventListener("click", () => toggleToolCard(node));
         return node;
@@ -1210,6 +1329,20 @@ DEMO_INDEX_HTML = """<!doctype html>
         `${status ? `<div class="reply-status ${status.kind}">${escapeHtml(status.label)}</div>` : ""}` +
         `<div class="bubble-content">${rendered}</div>` +
         `</div>`;
+      return node;
+    }
+
+    function renderProcessConversationCard(event) {
+      const card = formatRunEvent(event);
+      const hasDetail = Boolean(event.detail && event.detail !== card.summary);
+      const node = document.createElement("section");
+      node.className = `process-card ${card.status || "running"} ${hasDetail ? "has-detail" : ""}`;
+      node.innerHTML =
+        `<div class="process-head"><span class="process-dot"></span><span class="process-title">${escapeHtml(card.title)}</span><p class="process-summary">${escapeHtml(card.summary || "")}</p><span class="process-meta">${escapeHtml(card.meta || "")}</span></div>` +
+        `${hasDetail ? `<div class="process-body">${escapeHtml(event.detail || "")}</div>` : ""}`;
+      if (hasDetail) {
+        node.querySelector(".process-head").addEventListener("click", () => node.classList.toggle("open"));
+      }
       return node;
     }
 
@@ -1331,9 +1464,34 @@ DEMO_INDEX_HTML = """<!doctype html>
     }
 
     function appendConversation(role, content) {
-      conversation.push({ role, content });
+      const item = { role, content };
+      conversation.push(item);
       if (conversation.length > 80) conversation.shift();
       renderConversation();
+      return item;
+    }
+
+    function appendConversationEvent(role, event) {
+      const key = event.seq ? `${role}-${event.seq}` : `${role}-${event.stage}-${event.turn_id}-${event.message}`;
+      if (conversation.some(item => item.key === key)) return;
+      conversation.push({ role, content: event, key });
+      if (conversation.length > 80) conversation.shift();
+      renderConversation();
+    }
+
+    function beginThinking(message) {
+      activeThinkingId = `thinking-${Date.now()}`;
+      appendConversation("thinking", message || "Ming 正在思考下一步。").id = activeThinkingId;
+    }
+
+    function finishThinking() {
+      if (!activeThinkingId) return;
+      const index = conversation.findIndex(item => item.role === "thinking" && item.id === activeThinkingId);
+      if (index >= 0) {
+        conversation.splice(index, 1);
+        renderConversation();
+      }
+      activeThinkingId = "";
     }
 
     async function submitChat(event) {
@@ -1342,19 +1500,27 @@ DEMO_INDEX_HTML = """<!doctype html>
       const message = input.value.trim();
       if (!message) return;
       appendConversation("user", message);
+      beginThinking("已收到消息，正在整理上下文、选择工具和执行路径。");
       setChatRunning(true, "submitting");
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      const payload = await response.json();
-      if (response.status === 202) {
-        input.value = "";
-        setChatRunning(true, `running ${payload.turn_id}`);
-      } else {
-        setChatRunning(false, payload.status || "error");
-        appendConversation("notice", payload.error || payload.status || "submit failed");
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        const payload = await response.json();
+        if (response.status === 202) {
+          input.value = "";
+          setChatRunning(true, `running ${payload.turn_id}`);
+        } else {
+          finishThinking();
+          setChatRunning(false, payload.status || "error");
+          appendConversation("notice", payload.error || payload.status || "submit failed");
+        }
+      } catch (error) {
+        finishThinking();
+        setChatRunning(false, "error");
+        appendConversation("notice", `提交失败：${error}`);
       }
     }
 
@@ -1365,6 +1531,7 @@ DEMO_INDEX_HTML = """<!doctype html>
       if (response.status === 200) {
         appendConversation("notice", "已停止本轮思考。");
       }
+      finishThinking();
       setChatRunning(false, payload.status || "idle");
     }
 
@@ -1380,6 +1547,7 @@ DEMO_INDEX_HTML = """<!doctype html>
         context: "整理上下文",
         route: "选择策略",
         llm: "模型思考",
+        thought: "模型结果",
         tool: "工具执行",
         verify: "校验结果",
         done: "保存进度",
@@ -1392,11 +1560,18 @@ DEMO_INDEX_HTML = """<!doctype html>
         id: `live-${event.seq || Date.now()}-${stage}`,
         kind: stage,
         title: labels[stage] || stage,
-        status: stage === "error" ? "error" : stage === "final" ? "done" : "running",
-        summary: event.message || event.detail || "",
+        status: stage === "error" ? "error" : ["done", "final"].includes(stage) ? "done" : "running",
+        summary: stage === "thought" ? (event.detail || event.message || "") : (event.message || event.detail || ""),
+        meta: event.turn_id ? event.turn_id.slice(-6) : "",
         collapsed: stage === "tool",
         details: event,
       };
+    }
+
+    function toolNameFromEvent(event) {
+      const source = `${event.message || ""} ${event.detail || ""}`;
+      const match = source.match(/(?:执行工具|工具)\\s+([A-Za-z0-9_\\-]+)/);
+      return match ? match[1] : "";
     }
 
     function appendRunEvent(event) {
@@ -1408,23 +1583,30 @@ DEMO_INDEX_HTML = """<!doctype html>
 
     function handleConversationEvent(event) {
       appendRunEvent(event);
+      const processStages = ["submitted", "context", "route", "llm", "thought", "verify", "done"];
+      if (processStages.includes(event.stage)) {
+        appendConversationEvent("process", event);
+      }
       if (event.stage === "tool") {
-        appendConversation("tool", event);
+        appendConversationEvent("tool", event);
         return;
       }
       if (event.stage === "final") {
+        finishThinking();
         appendConversation("ming", event.detail || event.message);
         setChatRunning(false, "ready");
         loadState();
         return;
       }
       if (event.stage === "error") {
+        finishThinking();
         appendConversation("notice", event.detail || event.message);
         setChatRunning(false, "error");
         loadState();
         return;
       }
       if (event.stage === "cancelled") {
+        finishThinking();
         appendConversation("notice", event.message);
         setChatRunning(false, "cancelled");
         loadState();
@@ -1434,7 +1616,7 @@ DEMO_INDEX_HTML = """<!doctype html>
     function connectLiveEvents() {
       const status = document.getElementById("liveStatus");
       const source = new EventSource("/api/events");
-      const stages = ["submitted", "context", "route", "llm", "tool", "verify", "done", "final", "error", "cancelled", "heartbeat"];
+      const stages = ["submitted", "context", "route", "llm", "thought", "tool", "verify", "done", "final", "error", "cancelled", "heartbeat"];
       source.onopen = () => { if (status) status.textContent = "connected"; };
       source.onerror = () => { if (status) status.textContent = "reconnecting"; };
       for (const stage of stages) {

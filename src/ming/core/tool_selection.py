@@ -6,6 +6,19 @@ class ToolSelector:
         lowered = user_input.lower()
         available = set(available_tool_names)
 
+        url_terms = [
+            "http://",
+            "https://",
+            "github.com",
+            "gitlab.com",
+            "仓库",
+            "repo",
+            "repository",
+        ]
+        if any(term in lowered for term in url_terms):
+            preferred = ["web_fetch", "web_research", "web_search", "file_read"]
+            return [name for name in preferred if name in available]
+
         web_terms = [
             "搜索",
             "搜一下",

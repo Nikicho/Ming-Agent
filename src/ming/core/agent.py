@@ -333,6 +333,11 @@ class Agent:
             llm_latency_ms = int((time.monotonic() - llm_t0) * 1000)
             step_metrics = LLMCallMetrics.from_usage(response.usage, llm_latency_ms)
             self.session_trace.record_llm_call(response.usage, llm_latency_ms)
+            self._emit_progress(
+                "thought",
+                f"模型返回，第 {iteration} 轮",
+                detail=self._summarize_llm_response(response),
+            )
 
             # Case 1: Tool calls → execute and loop
             if response.tool_calls:
@@ -682,6 +687,29 @@ class Agent:
             )
         except Exception as exc:
             logger.debug("Progress callback failed: %s", exc)
+
+    def _summarize_llm_response(self, response: LLMResponse) -> str:
+        """Create a user-facing summary of an LLM round without exposing hidden CoT."""
+        parts: list[str] = []
+        content = self._strip_final_marker(response.content).strip()
+        if content:
+            parts.append(f"模型回复：{self._compact_text(content, max_chars=240)}")
+        tool_names = [
+            str(call.get("function", {}).get("name", "tool"))
+            for call in (response.tool_calls or [])
+        ]
+        if tool_names:
+            parts.append(f"准备调用工具：{', '.join(tool_names)}")
+        if not parts:
+            parts.append("模型已返回空内容，等待下一步。")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _compact_text(value: str, max_chars: int = 240) -> str:
+        text = " ".join(value.split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 1].rstrip() + "…"
 
     def _build_instant_context(self, user_input: str) -> str:
         return (

@@ -317,12 +317,17 @@ async def test_agent_emits_summary_progress_events(tmp_path, monkeypatch):
         "context",
         "route",
         "llm",
+        "thought",
         "tool",
         "llm",
+        "thought",
         "verify",
         "done",
     ]
     assert any(event.message == "执行工具 file_write" for event in events)
+    thought_events = [event for event in events if event.stage == "thought"]
+    assert "准备调用工具：file_write" in thought_events[0].detail
+    assert "已写入 out.txt" in thought_events[1].detail
     assert all(event.turn_id for event in events)
     assert len({event.turn_id for event in events}) == 1
 

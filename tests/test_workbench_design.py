@@ -33,6 +33,8 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "panel process-rail" in html
     assert "composer-box" in html
     assert "tool-card" in html
+    assert "thinking-card" in html
+    assert "process-card" in html
     assert "notice" in html
     assert "verdict-card" in html
     assert "modal-backdrop" in html
@@ -48,6 +50,9 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "EventSource" in html
     assert "renderProgressCard" in html
     assert "renderConversationItem" in html
+    assert "模型结果" in html
+    assert "beginThinking" in html
+    assert "appendConversationEvent" in html
     assert "toggleToolCard" in html
     assert "openModal" in html
     assert "setTab" in html

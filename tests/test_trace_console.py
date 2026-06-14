@@ -96,7 +96,13 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "计划说明" in html
     assert "暂无产物" in html
     assert "模型思考" in html
+    assert "模型结果" in html
     assert "工具执行" in html
+    assert "thinking-card" in html
+    assert "process-card" in html
+    assert "beginThinking" in html
+    assert "finishThinking" in html
+    assert "appendConversationEvent" in html
     assert payload["agent"]["state"] == "idle"
     assert payload["timeline"][0]["kind"] == "empty"
 
@@ -105,15 +111,15 @@ def test_trace_console_formats_sse_event(tmp_path):
     app = TraceConsoleApp(tmp_path)
     event = {
         "seq": 1,
-        "stage": "llm",
-        "message": "调用模型，第 1 轮",
+        "stage": "thought",
+        "message": "模型返回，第 1 轮",
         "turn_id": "turn-1",
     }
 
     payload = app.format_sse(event)
 
     assert payload.startswith("id: 1\n")
-    assert "event: llm\n" in payload
+    assert "event: thought\n" in payload
     assert "data: " in payload
     assert payload.endswith("\n\n")
 

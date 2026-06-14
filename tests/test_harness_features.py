@@ -27,6 +27,25 @@ def test_tool_selector_prefers_web_tools_for_search_requests():
     assert "bash" not in selected
 
 
+def test_tool_selector_prefers_web_fetch_for_url_and_github_requests():
+    selected = ToolSelector().select_tool_names(
+        "https://github.com/Leonxlnx/taste-skill 在这个 github 仓库里找一下用法",
+        available_tool_names=[
+            "bash",
+            "file_read",
+            "file_write",
+            "file_edit",
+            "web_search",
+            "web_fetch",
+            "web_research",
+        ],
+    )
+
+    assert selected[:3] == ["web_fetch", "web_research", "web_search"]
+    assert "bash" not in selected
+    assert "file_write" not in selected
+
+
 def test_tool_selector_keeps_local_page_tasks_on_file_tools():
     selected = ToolSelector().select_tool_names(
         "帮我写个简单页面，并且运行起来，页面是个番茄钟",
