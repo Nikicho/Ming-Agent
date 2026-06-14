@@ -17,6 +17,15 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "异常原因" in html
     assert "SessionTrace" in html
     assert "设置与模型" in html
+    assert "模型连接" in html
+    assert "LLM API 地址" in html
+    assert "模型名称" in html
+    assert "API Key" in html
+    assert "单次请求超时" in html
+    assert "保存到本地设置" in html
+    assert "sk-local-demo-key" not in html
+    assert '<pre id="settingsPanel">' not in html
+    assert 'class="settings-card"' in html
     assert "app-shell sidebar-open" not in html
     assert "app-shell" in html
     assert "panel session-rail" in html
@@ -104,4 +113,8 @@ def test_workbench_state_exposes_sessions_process_panel_and_trace_tabs(tmp_path)
     assert "timeline" in state["trace_tabs"]
     assert "exception" in state["trace_tabs"]
     assert "session_trace" in state["trace_tabs"]
+    assert state["trace_tabs"]["settings"]["model"]
+    assert "api_key" not in state["trace_tabs"]["settings"]
+    assert "api_key_configured" in state["trace_tabs"]["settings"]
+    assert state["settings"]["model"] == state["trace_tabs"]["settings"]["model"]
     assert any(card["kind"] == "tool" and card["collapsed"] for card in state["timeline"])

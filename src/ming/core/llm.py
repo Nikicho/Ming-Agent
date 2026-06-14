@@ -56,6 +56,7 @@ async def call_llm(
             "messages": [m.model_dump(exclude_none=True) for m in messages],
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
+            "timeout": config.request_timeout_seconds,
         }
 
         if config.api_key:

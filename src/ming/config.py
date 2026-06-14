@@ -20,6 +20,7 @@ class LLMConfig(BaseModel):
     api_base: str = ""
     temperature: float = 0.3
     max_tokens: int = 4096
+    request_timeout_seconds: int = 90
 
 
 class ContextConfig(BaseModel):

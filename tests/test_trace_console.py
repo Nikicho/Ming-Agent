@@ -1,5 +1,7 @@
 import json
 
+import yaml
+
 from ming.core.llm import Message
 from ming.core.session_trace import LLMCallMetrics, SessionTrace, ToolCallTrace
 from ming.core.trace import CheckpointStore
@@ -79,6 +81,10 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "&#129504;" in html
     assert "&#128202;" in html
     assert "&#9881;" in html
+    assert "模型连接" in html
+    assert "LLM API 地址" in html
+    assert "保存到本地设置" in html
+    assert "sk-local-demo-key" not in html
     assert "SSE 实时事件" not in html
     assert 'id="runTimeline"' not in html
     assert 'id="liveEvents"' not in html
@@ -173,3 +179,39 @@ def test_trace_console_stop_current_turn_maps_runtime_status(tmp_path):
 
     assert status == 200
     assert payload == {"status": "cancelled", "turn_id": "turn-1"}
+
+
+def test_trace_console_save_settings_writes_local_config_without_clearing_api_key(tmp_path):
+    local_path = tmp_path / "config" / "local.yaml"
+    local_path.parent.mkdir()
+    local_path.write_text(
+        yaml.safe_dump({"llm": {"api_key": "existing-key"}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    app = TraceConsoleApp(tmp_path)
+
+    status, payload = app.save_settings(
+        {
+            "model": "deepseek/deepseek-chat",
+            "api_base": "https://api.deepseek.com/v1",
+            "api_key": "",
+            "request_timeout_seconds": "45 秒",
+        }
+    )
+
+    saved = yaml.safe_load(local_path.read_text(encoding="utf-8"))
+    assert status == 200
+    assert payload["status"] == "settings_saved"
+    assert saved["llm"]["model"] == "deepseek/deepseek-chat"
+    assert saved["llm"]["api_base"] == "https://api.deepseek.com/v1"
+    assert saved["llm"]["api_key"] == "existing-key"
+    assert saved["llm"]["request_timeout_seconds"] == 45
+
+
+def test_trace_console_save_settings_requires_model(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+
+    status, payload = app.save_settings({"model": ""})
+
+    assert status == 400
+    assert payload["status"] == "invalid"

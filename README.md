@@ -25,6 +25,7 @@ llm:
   fallback_models:
     - "openai/gpt-4o-mini"
   api_key: "your-api-key"
+  request_timeout_seconds: 90
 ```
 
 也可以用环境变量：

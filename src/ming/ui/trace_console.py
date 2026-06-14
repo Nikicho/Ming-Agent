@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import yaml
+
+from ming.config import load_config
 from ming.core.live_events import LiveEventStore
 from ming.ui.chat_runtime import ChatRuntime
 
@@ -687,6 +690,47 @@ DEMO_INDEX_HTML = """<!doctype html>
       font-family: var(--mono); font-size: 12px; line-height: 1.55;
     }
 
+    .settings-grid { display: grid; gap: 16px; }
+    .settings-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 254, 250, .78);
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .settings-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .settings-field { display: grid; gap: 6px; }
+    .settings-field label {
+      color: var(--ink-2);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .settings-field input {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: #fff;
+      color: var(--ink);
+      padding: 0 10px;
+    }
+    .settings-field input[readonly] { cursor: default; }
+    .settings-save {
+      height: 36px;
+      padding: 0 16px;
+      border-radius: var(--radius-sm);
+      font-weight: 680;
+      font-size: 13px;
+      background: var(--accent-2);
+      color: var(--accent);
+      border: 1px solid rgba(22, 120, 102, .28);
+      justify-self: start;
+    }
+
     .hidden { display: none; }
 
     @media (prefers-reduced-motion: reduce) {
@@ -704,6 +748,7 @@ DEMO_INDEX_HTML = """<!doctype html>
         display: none;
       }
       .verdict-columns { grid-template-columns: 1fr; }
+      .settings-fields { grid-template-columns: 1fr; }
       .verdict-col:first-child { border-right: 0; border-bottom: 1px solid var(--line); }
     }
 
@@ -823,7 +868,35 @@ DEMO_INDEX_HTML = """<!doctype html>
         <section class="tab-panel" data-panel="timeline"><div class="timeline" id="timelinePanel"></div></section>
         <section class="tab-panel hidden" data-panel="exception"><div class="timeline" id="exceptionPanel"></div></section>
         <section class="tab-panel hidden" data-panel="session_trace"><pre id="tracePanel">{}</pre></section>
-        <section class="tab-panel hidden" data-panel="settings"><pre id="settingsPanel">{}</pre></section>
+        <section class="tab-panel hidden" data-panel="settings">
+          <div class="settings-grid" id="settingsPanel">
+            <div class="settings-card">
+              <div>
+                <div class="section-title">模型连接</div>
+                <div class="subtle">接入 DeepSeek、GLM、MiniMax 或本地兼容 OpenAI 格式的服务。密钥只保存在本地。</div>
+              </div>
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <label for="settingsApiBase">LLM API 地址</label>
+                  <input id="settingsApiBase" value="">
+                </div>
+                <div class="settings-field">
+                  <label for="settingsModel">模型名称</label>
+                  <input id="settingsModel" value="">
+                </div>
+                <div class="settings-field">
+                  <label for="settingsApiKey">API Key</label>
+                  <input id="settingsApiKey" type="password" value="">
+                </div>
+                <div class="settings-field">
+                  <label for="settingsTimeout">单次请求超时</label>
+                  <input id="settingsTimeout" value="">
+                </div>
+              </div>
+              <button class="settings-save" id="settingsSaveBtn" type="button">保存到本地设置</button>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </div>
@@ -974,7 +1047,44 @@ DEMO_INDEX_HTML = """<!doctype html>
       renderTimelinePanel();
       renderExceptionPanel();
       document.getElementById("tracePanel").textContent = JSON.stringify(traceTabs.session_trace || {}, null, 2);
-      document.getElementById("settingsPanel").textContent = JSON.stringify(traceTabs.settings || {}, null, 2);
+      if (!document.activeElement.closest("#settingsPanel")) renderSettingsPanel();
+    }
+
+    function renderSettingsPanel() {
+      const settings = traceTabs.settings || {};
+      const apiBase = document.getElementById("settingsApiBase");
+      const apiKey = document.getElementById("settingsApiKey");
+      apiBase.value = settings.api_base || "";
+      apiBase.placeholder = "LiteLLM provider 默认地址";
+      document.getElementById("settingsModel").value = settings.model || "未配置";
+      apiKey.value = "";
+      apiKey.placeholder = settings.api_key_configured ? "已在本地配置，输入新 key 可覆盖" : "未配置";
+      document.getElementById("settingsTimeout").value = `${settings.request_timeout_seconds || 90} 秒`;
+    }
+
+    async function saveSettings() {
+      const button = document.getElementById("settingsSaveBtn");
+      button.disabled = true;
+      button.textContent = "保存中";
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_base: document.getElementById("settingsApiBase").value.trim(),
+          model: document.getElementById("settingsModel").value.trim(),
+          api_key: document.getElementById("settingsApiKey").value.trim(),
+          request_timeout_seconds: document.getElementById("settingsTimeout").value.trim(),
+        }),
+      });
+      const payload = await response.json();
+      button.disabled = false;
+      button.textContent = response.ok ? "已保存" : "保存失败";
+      document.getElementById("chatStatus").textContent = payload.status || "settings";
+      if (response.ok) {
+        document.getElementById("settingsApiKey").value = "";
+        await loadState();
+      }
+      setTimeout(() => { button.textContent = "保存到本地设置"; }, 1400);
     }
 
     function renderTimelinePanel(cards) {
@@ -1247,6 +1357,7 @@ DEMO_INDEX_HTML = """<!doctype html>
     });
     document.getElementById("chatForm").addEventListener("submit", submitChat);
     document.getElementById("stopTurnBtn").addEventListener("click", stopTurn);
+    document.getElementById("settingsSaveBtn").addEventListener("click", saveSettings);
     renderConversation();
     renderLiveEvents();
     connectLiveEvents();
@@ -1279,7 +1390,8 @@ class TraceConsoleState:
         sessions = self._build_sessions(session, checkpoint)
         artifacts = self._build_artifacts(session_trace_path, checkpoint_path, checkpoint)
         context = self._build_context(session, turn, artifacts)
-        trace_tabs = self._build_trace_tabs(session, turn, timeline, artifacts)
+        config_snapshot = self._build_config_snapshot()
+        trace_tabs = self._build_trace_tabs(session, turn, timeline, artifacts, config_snapshot)
 
         process_panel = {
             "todo": checkpoint.get("todo") or {"items": []},
@@ -1308,6 +1420,7 @@ class TraceConsoleState:
             },
             "process_panel": process_panel,
             "trace_tabs": trace_tabs,
+            "settings": config_snapshot,
             "todo": process_panel["todo"],
             "timeline": timeline,
             "subagents": self._subagents(turn, state),
@@ -1537,6 +1650,7 @@ class TraceConsoleState:
         turn: dict[str, Any],
         timeline: list[dict[str, Any]],
         artifacts: dict[str, Any],
+        config_snapshot: dict[str, Any],
     ) -> dict[str, Any]:
         return {
             "timeline": timeline,
@@ -1549,10 +1663,24 @@ class TraceConsoleState:
                 "schema_version": session.get("schema_version", ""),
                 "session_id": session.get("session_id", ""),
             },
-            "settings": {
-                "model": (session.get("agent") or {}).get("model", ""),
+            "settings": config_snapshot
+            | {
+                "trace_model": (session.get("agent") or {}).get("model", ""),
                 "agent_version": (session.get("agent") or {}).get("version", ""),
             },
+        }
+
+    def _build_config_snapshot(self) -> dict[str, Any]:
+        config = load_config()
+        return {
+            "model": config.llm.model,
+            "fallback_models": config.llm.fallback_models,
+            "api_base": config.llm.api_base,
+            "api_key_configured": bool(config.llm.api_key),
+            "temperature": config.llm.temperature,
+            "max_tokens": config.llm.max_tokens,
+            "request_timeout_seconds": config.llm.request_timeout_seconds,
+            "max_seconds": config.agent.max_seconds,
         }
 
     def _exception_notice(self, turn: dict[str, Any]) -> str:
@@ -1659,6 +1787,51 @@ class TraceConsoleApp:
             return 409, result
         return 200, result
 
+    def save_settings(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        model = str(payload.get("model") or "").strip()
+        if not model:
+            return 400, {"status": "invalid", "error": "model is required"}
+
+        timeout_seconds = self._parse_seconds(payload.get("request_timeout_seconds"), default=90)
+        local_path = self.workspace_root / "config" / "local.yaml"
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_data: dict[str, Any] = {}
+        if local_path.exists():
+            try:
+                local_data = yaml.safe_load(local_path.read_text(encoding="utf-8")) or {}
+            except (OSError, yaml.YAMLError):
+                return 500, {"status": "error", "error": "无法读取 config/local.yaml"}
+
+        llm = dict(local_data.get("llm") or {})
+        llm["model"] = model
+        llm["api_base"] = str(payload.get("api_base") or "").strip()
+        llm["request_timeout_seconds"] = timeout_seconds
+        api_key = str(payload.get("api_key") or "").strip()
+        if api_key:
+            llm["api_key"] = api_key
+        local_data["llm"] = llm
+
+        try:
+            local_path.write_text(
+                yaml.safe_dump(local_data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            return 500, {"status": "error", "error": "无法写入 config/local.yaml"}
+
+        return 200, {
+            "status": "settings_saved",
+            "path": str(local_path),
+            "api_key_configured": bool(llm.get("api_key")),
+        }
+
+    def _parse_seconds(self, value: Any, default: int) -> int:
+        text_value = str(value or "").strip()
+        digits = "".join(ch for ch in text_value if ch.isdigit())
+        if not digits:
+            return default
+        return max(1, min(600, int(digits)))
+
     def format_sse(self, event: dict[str, Any]) -> str:
         event_name = str(event.get("stage") or event.get("type") or "message")
         data = json.dumps(event, ensure_ascii=False)
@@ -1725,6 +1898,10 @@ class TraceConsoleApp:
                     return
                 if path == "/api/turns/current/stop":
                     status, payload = app.stop_current_turn()
+                    self._send_json(status, payload)
+                    return
+                if path == "/api/settings":
+                    status, payload = app.save_settings(self._read_json_body())
                     self._send_json(status, payload)
                     return
                 self._send(404, "Not found", "text/plain; charset=utf-8")
