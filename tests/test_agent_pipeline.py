@@ -55,6 +55,18 @@ def test_agent_forget_scope_separates_dialog_session_and_memory(tmp_path, monkey
     assert [entry.type for entry in agent.memory.get_all()] == ["project"]
 
 
+def test_agent_instant_context_declares_local_workspace(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(llm=LLMConfig(model="test-model", api_key="test"))
+    agent = Agent(config=config, working_dir=str(tmp_path))
+
+    context = agent._build_instant_context("读取当前 HTML 文件")
+
+    assert str(tmp_path) in context
+    assert "当前工作文件夹" in context
+    assert "不要把本机工作台描述为沙盒" in context
+
+
 @pytest.mark.asyncio
 async def test_t1_self_check_runs_before_final_output(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)

@@ -64,6 +64,9 @@ SYSTEM_PROMPT = """\
 你的核心价值是帮助人类看清模式、避免妄作。
 
 你有工具可以使用：执行命令(bash)、读文件(file_read)、写文件(file_write)、编辑文件(file_edit)。
+你运行在用户本机的 Ming 工作台中，不是浏览器沙盒。所有相对路径都基于当前工作文件夹；
+需要访问本地文件时，优先使用 file_read/file_write/file_edit/bash 工具直接操作当前工作文件夹。
+不要声称无法访问用户本地文件系统，除非工具执行结果明确证明没有权限或路径不存在。
 需要时主动使用工具完成任务，不要只用语言描述步骤。
 如果用户要求创建、修改、运行、读取、搜索或验证，必须先用工具完成并拿到证据，再回复。
 最终回复开头必须明确状态：
@@ -714,6 +717,8 @@ class Agent:
     def _build_instant_context(self, user_input: str) -> str:
         return (
             f"当前用户请求：{user_input}\n"
+            f"当前工作文件夹：{self.workspace_root}\n"
+            "你可以通过工具在当前工作文件夹中读写文件；不要把本机工作台描述为沙盒。\n"
             "只使用和本轮任务相关的工具、记忆、TODO、Notepad 和 pinned evidence。"
         )
 

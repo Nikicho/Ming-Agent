@@ -279,6 +279,21 @@ DEMO_INDEX_HTML = """<!doctype html>
       border-left: 1px solid var(--line);
     }
 
+    .workspace-chip {
+      max-width: 260px;
+      min-height: 28px;
+      padding: 0 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fffefa;
+      color: var(--ink-2);
+      font-size: 11px;
+      font-weight: 650;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     .topbar-right {
       margin-left: auto;
       display: flex; align-items: center; gap: 6px;
@@ -970,6 +985,7 @@ DEMO_INDEX_HTML = """<!doctype html>
           <button class="icon-button" type="button" id="toggleSidebar" title="切换会话列表">☰</button>
           <div class="topbar-brand"><span class="brand-mark">明</span><span>Ming</span></div>
           <div class="topbar-session" id="taskText">暂无任务</div>
+          <button class="workspace-chip" type="button" data-modal="settings" id="workspaceButton" title="切换工作文件夹">工作区：<span id="workspaceText">...</span></button>
         </div>
         <div class="topbar-right">
           <span class="chip">DeepSeek</span>
@@ -1046,6 +1062,10 @@ DEMO_INDEX_HTML = """<!doctype html>
               </div>
               <div class="settings-fields">
                 <div class="settings-field">
+                  <label for="settingsWorkspace">工作文件夹</label>
+                  <input id="settingsWorkspace" value="">
+                </div>
+                <div class="settings-field">
                   <label for="settingsApiBase">LLM API 地址</label>
                   <input id="settingsApiBase" value="">
                 </div>
@@ -1100,6 +1120,8 @@ DEMO_INDEX_HTML = """<!doctype html>
     function render(state) {
       document.getElementById("taskText").textContent = state.current_task.text || "暂无任务";
       document.getElementById("stateText").textContent = `${state.agent.state} · ${state.agent.mode}`;
+      document.getElementById("workspaceText").textContent = compactPath(state.workspace || "");
+      document.getElementById("workspaceButton").title = `工作文件夹：${state.workspace || ""}`;
       stateTimeline = state.timeline || [];
       traceTabs = state.trace_tabs || {};
       allSessions = state.sessions || [];
@@ -1237,6 +1259,7 @@ DEMO_INDEX_HTML = """<!doctype html>
       const settings = traceTabs.settings || {};
       const apiBase = document.getElementById("settingsApiBase");
       const apiKey = document.getElementById("settingsApiKey");
+      document.getElementById("settingsWorkspace").value = currentState.workspace || "";
       apiBase.value = settings.api_base || "";
       apiBase.placeholder = "LiteLLM provider 默认地址";
       document.getElementById("settingsModel").value = settings.model || "未配置";
@@ -1257,6 +1280,7 @@ DEMO_INDEX_HTML = """<!doctype html>
           model: document.getElementById("settingsModel").value.trim(),
           api_key: document.getElementById("settingsApiKey").value.trim(),
           request_timeout_seconds: document.getElementById("settingsTimeout").value.trim(),
+          workspace_root: document.getElementById("settingsWorkspace").value.trim(),
         }),
       });
       const payload = await response.json();
@@ -1432,7 +1456,7 @@ DEMO_INDEX_HTML = """<!doctype html>
     }
 
     function isMarkdownSeparator(line) {
-      return /^(-{3,}|\\*{3,}|_{3,})$/.test(line);
+      return /^([-*_]\\s*){3,}$/.test(line) || /^[\u2014\u2500\u2501]{3,}$/.test(line);
     }
 
     function formatInline(value) {
@@ -1737,6 +1761,14 @@ DEMO_INDEX_HTML = """<!doctype html>
 
     function text(value) {
       return value === undefined || value === null ? "" : String(value);
+    }
+
+    function compactPath(value) {
+      const path = text(value);
+      if (path.length <= 36) return path;
+      const parts = path.split(/[\\/]/).filter(Boolean);
+      if (parts.length >= 2) return `${parts[0]}\\...\\${parts[parts.length - 1]}`;
+      return `...${path.slice(-33)}`;
     }
 
     document.getElementById("toggleSidebar").addEventListener("click", () => {
@@ -2328,11 +2360,14 @@ class TraceConsoleApp:
 
     def __init__(self, workspace_root: str | Path | None = None, chat_runtime: Any | None = None):
         self.workspace_root = Path(workspace_root or Path.cwd())
-        self.state_builder = TraceConsoleState(self.workspace_root)
+        self.ui_state_path = self.workspace_root / ".ming" / "ui_state.json"
+        self.active_workspace_root = self._load_active_workspace_root()
+        self.state_builder = TraceConsoleState(self.active_workspace_root)
         self.live_events = LiveEventStore(self.workspace_root / ".ming" / "live")
         self._chat_runtime = chat_runtime
 
     def state(self) -> dict[str, Any]:
+        self.state_builder = TraceConsoleState(self.active_workspace_root)
         return self.state_builder.load()
 
     def state_json(self) -> str:
@@ -2343,7 +2378,10 @@ class TraceConsoleApp:
 
     def chat_runtime(self):
         if self._chat_runtime is None:
-            self._chat_runtime = ChatRuntime(self.workspace_root, live_events=self.live_events)
+            self._chat_runtime = ChatRuntime(
+                self.active_workspace_root,
+                live_events=self.live_events,
+            )
         return self._chat_runtime
 
     def submit_chat(self, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -2387,6 +2425,12 @@ class TraceConsoleApp:
             llm["api_key"] = api_key
         local_data["llm"] = llm
 
+        workspace_status = self._maybe_set_active_workspace(payload.get("workspace_root"))
+        if workspace_status is not None:
+            status, status_payload = workspace_status
+            if status != 200:
+                return status, status_payload
+
         try:
             local_path.write_text(
                 yaml.safe_dump(local_data, allow_unicode=True, sort_keys=False),
@@ -2399,7 +2443,62 @@ class TraceConsoleApp:
             "status": "settings_saved",
             "path": str(local_path),
             "api_key_configured": bool(llm.get("api_key")),
+            "workspace": str(self.active_workspace_root),
         }
+
+    def _maybe_set_active_workspace(self, value: Any) -> tuple[int, dict[str, Any]] | None:
+        raw_path = str(value or "").strip()
+        if not raw_path:
+            return None
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.workspace_root / candidate
+        try:
+            candidate = candidate.resolve()
+        except OSError:
+            return 400, {"status": "invalid", "error": "工作文件夹路径无效"}
+        if not candidate.exists() or not candidate.is_dir():
+            return 400, {"status": "invalid", "error": "工作文件夹不存在或不是文件夹"}
+        if candidate == self.active_workspace_root:
+            return 200, {"status": "workspace_unchanged", "workspace": str(candidate)}
+        runtime = self._chat_runtime
+        if runtime is not None and runtime.status().get("status") == "running":
+            return 409, {"status": "busy", "error": "当前任务运行中，不能切换工作文件夹"}
+        if runtime is not None:
+            runtime.shutdown()
+            self._chat_runtime = None
+        self.active_workspace_root = candidate
+        self.state_builder = TraceConsoleState(candidate)
+        self._save_ui_state()
+        return 200, {"status": "workspace_saved", "workspace": str(candidate)}
+
+    def _load_active_workspace_root(self) -> Path:
+        try:
+            data = json.loads(self.ui_state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return self.workspace_root
+        raw_path = str(data.get("workspace_root") or "").strip()
+        if not raw_path:
+            return self.workspace_root
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.workspace_root / candidate
+        try:
+            candidate = candidate.resolve()
+        except OSError:
+            return self.workspace_root
+        return candidate if candidate.exists() and candidate.is_dir() else self.workspace_root
+
+    def _save_ui_state(self) -> None:
+        self.ui_state_path.parent.mkdir(parents=True, exist_ok=True)
+        self.ui_state_path.write_text(
+            json.dumps(
+                {"workspace_root": str(self.active_workspace_root)},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def _parse_seconds(self, value: Any, default: int) -> int:
         text_value = str(value or "").strip()

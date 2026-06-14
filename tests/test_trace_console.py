@@ -85,6 +85,9 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "&#128202;" in html
     assert "&#9881;" in html
     assert "模型连接" in html
+    assert "工作文件夹" in html
+    assert "settingsWorkspace" in html
+    assert "workspaceText" in html
     assert "LLM API 地址" in html
     assert "保存到本地设置" in html
     assert "sk-local-demo-key" not in html
@@ -106,6 +109,7 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "beginThinking" in html
     assert "finishThinking" in html
     assert "appendConversationEvent" in html
+    assert "compactPath" in html
     assert payload["agent"]["state"] == "idle"
     assert payload["timeline"][0]["kind"] == "empty"
 
@@ -261,6 +265,44 @@ def test_trace_console_save_settings_writes_local_config_without_clearing_api_ke
     assert saved["llm"]["api_base"] == "https://api.deepseek.com/v1"
     assert saved["llm"]["api_key"] == "existing-key"
     assert saved["llm"]["request_timeout_seconds"] == 45
+    assert payload["workspace"] == str(tmp_path)
+
+
+def test_trace_console_save_settings_switches_active_workspace(tmp_path):
+    workspace = tmp_path / "MingWorkspace"
+    workspace.mkdir()
+    app = TraceConsoleApp(tmp_path)
+
+    status, payload = app.save_settings(
+        {
+            "model": "deepseek/deepseek-chat",
+            "api_base": "https://api.deepseek.com/v1",
+            "api_key": "",
+            "request_timeout_seconds": "45 秒",
+            "workspace_root": str(workspace),
+        }
+    )
+
+    assert status == 200
+    assert payload["workspace"] == str(workspace.resolve())
+    assert app.state()["workspace"] == str(workspace.resolve())
+    saved_state = json.loads((tmp_path / ".ming" / "ui_state.json").read_text(encoding="utf-8"))
+    assert saved_state["workspace_root"] == str(workspace.resolve())
+
+
+def test_trace_console_save_settings_rejects_missing_workspace(tmp_path):
+    app = TraceConsoleApp(tmp_path)
+
+    status, payload = app.save_settings(
+        {
+            "model": "deepseek/deepseek-chat",
+            "workspace_root": str(tmp_path / "missing"),
+        }
+    )
+
+    assert status == 400
+    assert payload["status"] == "invalid"
+    assert "工作文件夹" in payload["error"]
 
 
 def test_trace_console_save_settings_requires_model(tmp_path):
