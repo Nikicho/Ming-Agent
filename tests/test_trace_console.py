@@ -5,7 +5,7 @@ import yaml
 from ming.core.llm import Message
 from ming.core.session_trace import LLMCallMetrics, SessionTrace, ToolCallTrace
 from ming.core.trace import CheckpointStore
-from ming.ui.trace_console import TraceConsoleApp, TraceConsoleState
+from ming.ui.trace_console import TraceConsoleApp, TraceConsoleState, _is_client_disconnect
 
 
 def test_trace_console_builds_current_agent_state(tmp_path):
@@ -115,6 +115,13 @@ def test_trace_console_formats_sse_event(tmp_path):
     assert "event: llm\n" in payload
     assert "data: " in payload
     assert payload.endswith("\n\n")
+
+
+def test_trace_console_treats_browser_sse_disconnect_as_normal():
+    assert _is_client_disconnect(ConnectionAbortedError(10053, "aborted"))
+    assert _is_client_disconnect(ConnectionResetError(10054, "reset"))
+    assert _is_client_disconnect(BrokenPipeError(32, "broken pipe"))
+    assert not _is_client_disconnect(OSError(5, "unrelated"))
 
 
 def test_trace_console_loads_legacy_traces_directory(tmp_path):

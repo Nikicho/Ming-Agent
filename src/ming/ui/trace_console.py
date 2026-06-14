@@ -8,6 +8,7 @@ frontend build chain while the product interaction is still changing quickly.
 
 from __future__ import annotations
 
+import errno
 import json
 import time
 from datetime import datetime
@@ -23,6 +24,20 @@ from ming.core.live_events import LiveEventStore
 from ming.ui.chat_runtime import ChatRuntime
 
 WORKBENCH_SCHEMA_VERSION = "ming-workbench-v1"
+
+CLIENT_DISCONNECT_ERRNOS = {
+    errno.ECONNABORTED,
+    errno.ECONNRESET,
+    errno.EPIPE,
+    getattr(errno, "WSAECONNABORTED", 10053),
+    getattr(errno, "WSAECONNRESET", 10054),
+}
+
+
+def _is_client_disconnect(exc: BaseException) -> bool:
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+        return True
+    return isinstance(exc, OSError) and exc.errno in CLIENT_DISCONNECT_ERRNOS
 
 
 DEMO_INDEX_HTML = """<!doctype html>
@@ -2090,12 +2105,17 @@ class TraceConsoleApp:
 
             def _send(self, status: int, body: str, content_type: str) -> None:
                 payload = body.encode("utf-8")
-                self.send_response(status)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(payload)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(payload)
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except OSError as exc:
+                    if _is_client_disconnect(exc):
+                        return
+                    raise
 
             def _send_json(self, status: int, payload: dict[str, Any]) -> None:
                 self._send(
@@ -2119,25 +2139,27 @@ class TraceConsoleApp:
                 return payload if isinstance(payload, dict) else {}
 
             def _send_sse(self) -> None:
-                last_event_id = self.headers.get("Last-Event-ID")
-                if last_event_id is None:
-                    last_seq = app.default_event_start_seq()
-                else:
-                    try:
-                        last_seq = int(last_event_id or "0")
-                    except ValueError:
-                        last_seq = 0
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "keep-alive")
-                self.end_headers()
                 try:
+                    last_event_id = self.headers.get("Last-Event-ID")
+                    if last_event_id is None:
+                        last_seq = app.default_event_start_seq()
+                    else:
+                        try:
+                            last_seq = int(last_event_id or "0")
+                        except ValueError:
+                            last_seq = 0
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.end_headers()
                     for chunk in app.event_stream(last_seq=last_seq):
                         self.wfile.write(chunk.encode("utf-8"))
                         self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
+                except OSError as exc:
+                    if _is_client_disconnect(exc):
+                        return
+                    raise
 
         server = ThreadingHTTPServer((host, port), Handler)
         try:
