@@ -56,13 +56,13 @@ python -m ming
 python -m ming --help
 ```
 
-Trace Console 本地可视化界面：
+Ming Agent Workbench 本地可视化界面：
 
 ```powershell
 python -m ming ui --port 8765
 ```
 
-打开 `http://127.0.0.1:8765` 后，可以查看最近一轮 agent-loop 的任务、TODO、工具步骤、进展判断、可公开思路摘要、subagent 状态和 trace/checkpoint/notepad 路径。当前 UI 读取本地 `.ming/` 运行产物，不需要 API key，也不会展示底层 LiteLLM/provider 噪音日志。
+打开 `http://127.0.0.1:8765` 后，可以查看最近一轮 agent-loop 的任务、TODO、工具步骤、进展判断、可公开思路摘要、subagent 状态和 SessionTrace/checkpoint/notepad 路径。当前 UI 读取本地 `.ming/` 运行产物，不需要 API key，也不会展示底层 LiteLLM/provider 噪音日志。
 
 Dream 轻量审阅报告：
 
@@ -70,7 +70,7 @@ Dream 轻量审阅报告：
 python -m ming dream
 ```
 
-Dream 当前是非破坏性的离线整理器：读取 `.ming/traces/`、`.ming/checkpoints/` 和 `.ming/memory/`，生成 `.ming/dreams/<timestamp>_light.json`。它只提出任务摘要、project lessons、待复核记忆和重复记忆候选，不会自动改写记忆。
+Dream 当前是非破坏性的离线整理器：读取 `.ming/session_traces/`、`.ming/checkpoints/` 和 `.ming/memory/`，生成 `.ming/dreams/<timestamp>_light.json`。它只提出任务摘要、project lessons、待复核记忆和重复记忆候选，不会自动改写记忆。
 
 交互命令：
 
@@ -121,25 +121,26 @@ Dream 当前是非破坏性的离线整理器：读取 `.ming/traces/`、`.ming/
 CLI 默认展示高信号进度，例如“准备上下文”“调用模型”“执行工具 file_write”“执行 T3 核验”。底层 LiteLLM、httpx、asyncio 等 provider 日志默认不刷屏；需要看详细内部日志时使用 `/debug`，需要展开每步参数时使用 `/details`，完整记录仍可通过 `/trace` 查看。
 如果模型调用失败或用户按 `Ctrl+C` 停止当前轮，Ming 会优雅收口并落盘失败/停止 trace，而不是把 Python traceback 刷到用户界面。
 
-### Ming 任务工作台
+### Ming Agent Workbench
 
-`python -m ming ui` 会启动一个本地 Web UI，默认监听 `127.0.0.1:8765`。页面可以直接输入任务并通过 `/api/chat` 发起一轮 Ming 执行，也可以用 Stop 按钮调用 `/api/turns/current/stop` 停止当前轮。它把 `.ming/traces/`、`.ming/checkpoints/` 和 `.ming/live/events.jsonl` 整理成更接近产品体验的任务工作台：
+`python -m ming ui` 会启动一个本地 Web UI，默认监听 `127.0.0.1:8765`。页面可以直接输入任务并通过 `/api/chat` 发起一轮 Ming 执行，也可以用 Stop 按钮调用 `/api/turns/current/stop` 停止当前轮。它把 `.ming/session_traces/`、`.ming/checkpoints/` 和 `.ming/live/events.jsonl` 整理成更接近产品体验的任务工作台：
 
-- 顶部总览：当前任务、TODO、trace/checkpoint/notepad/changed files。
-- 主工作台：对话区、输入框、Stop 按钮，以及“执行过程”时间线。SSE 事件会被映射成“收到任务、整理上下文、选择策略、模型思考、工具执行、核验结果、保存进度、最终回复”等步骤卡。
-- 诊断侧栏：agent 状态、SSE 实时事件、可公开思考摘要、subagent 槽位和点击步骤后的结构化详情。
+- 左侧会话栏：默认收起，只在需要切换/查看最近会话时展开，降低常驻干扰。
+- 中央工作区：保留对话流、输入框和“停止思考”按钮，Enter 发送，Shift+Enter 换行。
+- 右侧过程面板：跟随当前任务展示 Agent 状态、执行过程、TODO、Artifacts、Context/Token、可公开思考摘要、Subagents 和 SSE 实时事件。
+- 详情弹窗：通过“做了什么 / 异常原因 / SessionTrace / 设置与模型”四个页签查看结构化细节。工具卡默认折叠，只有点击时展开参数和 raw detail；对抗分析只在需要人类判断时展示“观点 A/B + 裁决”。
 
-新打开的页面默认只接收打开之后的 live event，不会把历史 `events.jsonl` 重新灌进对话区；历史运行记录仍通过最近 trace/checkpoint 的执行过程和诊断详情查看。当前还没有 provider token 级逐字流式输出，也还不是 React/Tauri 版本；Web UI 已能发起、停止本地单轮任务，并展示 agent-loop 级别的 SSE 过程。
+新打开的页面默认只接收打开之后的 live event，不会把历史 `events.jsonl` 重新灌进对话区；历史运行记录仍通过最近 `SessionTrace` / checkpoint 的执行过程和诊断详情查看。当前还没有 provider token 级逐字流式输出，也还不是 React/Tauri 版本；Web UI 已能发起、停止本地单轮任务，并展示 agent-loop 级别的 SSE 过程。
 
 会话记录保存在本地 `.ming/`：
 
 - `.ming/checkpoints/<turn_id>/checkpoint.json`：保存本轮消息、TODO、trace/notepad 路径和摘要，可用于 `/resume`。
-- `.ming/traces/<turn_id>.json`：保存工具事件、progress assessment、observation 和最终输出。
+- `.ming/session_traces/<session_id>.json`：保存 `ming-trace-v1` 会话级结构化 trace，包括路由、步骤、工具调用、T1/T3、对抗分支、反馈和成本指标。
 - `.ming/live/events.jsonl`：保存 Web UI/CLI 可消费的高信号 SSE 事件流。
 - `.ming/scratch/<turn_id>/notes.md`：保存本轮 notepad、证据和 blocker。
 
 SSE 排障：
-- 页面还是旧 Trace Console：确认 `python -m ming ui --port 8765` 加载的是当前 `D:\Ming` 源码；必要时在项目根目录执行 `python -m pip install -e .`，然后重启服务并 `Ctrl+F5` 强刷浏览器。
+- 页面还是旧版样式：确认 `python -m ming ui --port 8765` 加载的是当前 `D:\Ming` 源码；必要时在项目根目录执行 `python -m pip install -e .`，然后重启服务并 `Ctrl+F5` 强刷浏览器。
 - Live Events 不更新：打开 `http://127.0.0.1:8765/api/events`，应能看到 `text/event-stream` 输出；如果没有，检查 8765 是否被旧进程占用。
 - Stop 后重复取消提示：当前 runtime 会去重同一 turn 的 `cancelled` live event，若仍重复，优先检查是否同时开了多个 UI 服务。
 - 敏感信息：live event 会对 `api_key=...`、`Authorization: Bearer ...`、`sk-...` 这类 key-like 内容做脱敏；`config/local.yaml` 仍不要提交。
@@ -182,8 +183,18 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 
 连续多次 `no_signal/artifact_noise` 会暂停本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略空转。用户界面会显示“为什么暂停、刚才主要尝试了哪些工具、下一步如何继续”；原始 `no_signal` 诊断保留在 trace/notepad 详情中。
 
-这些事件会保存到 `.ming/traces/<turn_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
-Trace 还会记录 observations 和 assessments；交互模式用 `/expand <event_id>` 可以展开最近 trace 的某个事件。
+这些事件会保存到 `.ming/session_traces/<session_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
+Trace 还会记录 observations 和 assessments；交互模式用 `/trace` 可以查看最近 SessionTrace 文件路径。
+
+### 测试与评测架构
+
+Ming 当前补齐了测试架构文档里的基础工程入口：
+
+- `SessionTrace` 采用 `ming-trace-v1`，作为调试、回放、回归测试和成本分析的统一输入。
+- `ming.eval.judges.select_judges_for_turn()` 会按 trace shape 选择必要 judge：默认 `gate_judge`，工具轮增加 `tool_use_judge`，对抗轮增加 `gamma_output_judge` 和 `adversarial_value_judge`，压缩事件增加 `compaction_judge`。
+- `ming.eval.golden.load_golden_conversation()` 支持加载 golden conversation YAML，作为后续 scenario replay 的标准格式。
+- `ming.eval.fingerprint.behavior_fingerprint()` 对路由、工具序列、循环状态、上限命中和 tier signal 生成稳定行为指纹。
+- `ming.eval.cost.summarize_trace_budget()` 汇总 LLM calls、tokens 和成本，并标记是否超过预算。
 
 ### Context 工作台
 
@@ -192,7 +203,7 @@ Context 由 `ContextAssembler` 显式组装，顺序是 base → session → ins
 - instant context：记录当前用户请求、风险/工具相关的本轮指令。
 - TODO：把多步请求拆成 checklist，并在工具执行后推进状态。
 - `.ming/scratch/<turn_id>/notes.md`：记录用户请求和工具调用观察。
-- `.ming/traces/<turn_id>.json`：记录工具事件、进展类型和最终输出。
+- `.ming/session_traces/<session_id>.json`：记录路由、步骤、工具事件、进展类型、反馈指标和最终输出。
 - `.ming/checkpoints/<turn_id>/checkpoint.json`：保存当前消息、TODO、trace 路径和 notepad 路径。
 - pinned evidence：压缩时强制保留关键证据，并校验摘要是否保留。
 - scope context：`/scope user,project,global` 控制 user/project/global 记忆是否注入 session layer。
@@ -305,13 +316,14 @@ Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trus
 - `/details` 展开进度详情。
 - `/forget session|memory|project` scope-aware 清理。
 - `/rollback` 回滚最近一次文件工具变更。
-- Trace Console 状态聚合、HTML 渲染、空状态、`/api/events` SSE live event、`/api/chat` 和停止当前轮。
+- Ming Agent Workbench 三栏 UI、状态聚合、HTML 渲染、空状态、`/api/events` SSE live event、`/api/chat` 和停止当前轮。
+- 测试架构基础接口：judge 选择、golden conversation YAML、行为指纹和成本预算摘要。
 
 ## 用力测试场景
 
 详见 [docs/experience-scenarios.md](docs/experience-scenarios.md)。建议先从“Windows 工具循环压力测试”和“对抗档架构审查”开始。
 
-体验 Trace Console 时可以按这个顺序压测：
+体验 Ming Agent Workbench 时可以按这个顺序压测：
 
 1. 启动 `python -m ming ui --port 8765`，打开 `http://127.0.0.1:8765`，确认 conversation、输入框、Stop、Live Events 和最近一轮 trace 都能正常展示。
 2. 在页面输入“创建 `scratch/webui_demo.txt`，内容写入 hello，然后读取确认”。确认 Conversation 里出现用户消息、运行事件和最终回复；右侧 Live Events 实时出现 `submitted`、`context`、`llm`、`tool`、`verify`、`done`、`final`。

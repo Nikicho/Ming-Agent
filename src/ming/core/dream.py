@@ -33,7 +33,9 @@ class DreamEngine:
         self.ming_root = self.workspace_root / ".ming"
 
     def run(self, mode: str = "light", limit: int = 10) -> Path:
-        traces = self._load_recent_json(self.ming_root / "traces", "*.json", limit)
+        session_traces = self._load_recent_json(
+            self.ming_root / "session_traces", "*.json", limit
+        )
         checkpoints = self._load_recent_json(
             self.ming_root / "checkpoints",
             "*/checkpoint.json",
@@ -42,26 +44,38 @@ class DreamEngine:
         memory = MemoryStore(self.ming_root / "memory")
         memories = memory.get_all()
 
+        turns = self._extract_turns(session_traces)
+
         report = DreamReport(
             mode=mode,
             generated_at=datetime.now().isoformat(timespec="seconds"),
             summary={
-                "trace_count": len(traces),
+                "session_trace_count": len(session_traces),
+                "turn_count": len(turns),
                 "checkpoint_count": len(checkpoints),
                 "memory_count": len(memories),
                 "stale_memory_count": len(memory.get_stale()),
             },
-            recent_tasks=self._recent_tasks(traces, checkpoints),
-            project_lessons=self._project_lessons(traces, checkpoints),
+            recent_tasks=self._recent_tasks(turns, checkpoints),
+            project_lessons=self._project_lessons(turns, checkpoints),
             stale_memory_candidates=self._stale_candidates(memory.get_stale()),
             duplicate_memory_candidates=self._duplicate_candidates(memories),
             next_actions=self._next_actions(memory.get_stale()),
         )
         return self._save_report(report)
 
+    def _extract_turns(
+        self, session_traces: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        turns: list[dict[str, Any]] = []
+        for session in session_traces:
+            for turn in session.get("turns", []):
+                turns.append(turn)
+        return turns
+
     def _recent_tasks(
         self,
-        traces: list[dict[str, Any]],
+        turns: list[dict[str, Any]],
         checkpoints: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         checkpoint_by_turn = {
@@ -70,30 +84,35 @@ class DreamEngine:
             if checkpoint.get("turn_id")
         }
         tasks = []
-        for trace in traces:
-            turn_id = trace.get("turn_id", "")
+        for turn in turns:
+            turn_id = turn.get("turn_id", "")
             checkpoint = checkpoint_by_turn.get(turn_id, {})
+            single = turn.get("single_agent") or {}
+            tool_count = sum(
+                len(step.get("tool_calls", []))
+                for step in single.get("steps", [])
+            )
             tasks.append({
                 "turn_id": turn_id,
-                "user_input": trace.get("user_input", ""),
-                "status": "completed" if trace.get("final_output") else "incomplete",
-                "tool_count": len(trace.get("tool_events") or []),
-                "assessment_count": len(trace.get("assessments") or []),
+                "user_input": turn.get("user_input", ""),
+                "status": "completed" if turn.get("final_output") else "incomplete",
+                "execution": turn.get("execution", "single"),
+                "tool_count": tool_count,
                 "changed_files": checkpoint.get("changed_files", []),
             })
         return tasks
 
     def _project_lessons(
         self,
-        traces: list[dict[str, Any]],
+        turns: list[dict[str, Any]],
         checkpoints: list[dict[str, Any]],
     ) -> list[str]:
         lessons: list[str] = []
         for checkpoint in checkpoints:
             for changed_file in checkpoint.get("changed_files", []):
                 lessons.append(f"Changed file observed: {changed_file}")
-        for trace in traces:
-            final_output = " ".join(str(trace.get("final_output", "")).split())
+        for turn in turns:
+            final_output = " ".join(str(turn.get("final_output", "")).split())
             if final_output:
                 lessons.append(f"Recent result: {self._shorten(final_output, 180)}")
         return lessons[:20]

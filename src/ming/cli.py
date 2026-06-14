@@ -137,10 +137,8 @@ def print_banner():
             "  /rollback Roll back the latest file tool change\n"
             "  /forget <session|memory|project> Scoped forget\n"
             "  /scope <user,project,global> Switch active memory scopes\n"
-            "  /expand <event_id> Expand a trace event\n"
             "  /cleanup Cleanup old checkpoints\n"
             "  /dream  Run a light Dream review report\n"
-            "  /trace   Show the latest run trace file\n"
             "  /checkpoint Show the latest checkpoint file\n"
             "  /details Toggle detailed progress\n\n"
             "[dim]Press Ctrl+C while Ming is running to stop the current turn.[/dim]",
@@ -193,6 +191,9 @@ async def interactive_loop():
             if user_input.startswith("/"):
                 cmd = user_input.lower().split()[0]
                 if cmd in ("/quit", "/exit", "/q"):
+                    if agent.session_trace.turns:
+                        trace_path = agent.save_session_trace()
+                        console.print(f"[dim]Session trace saved: {trace_path}[/dim]")
                     console.print("[dim]再见。[/dim]")
                     break
                 elif cmd == "/clear":
@@ -269,14 +270,6 @@ async def interactive_loop():
                         continue
                     console.print(f"[dim]Context scopes: {result['active_scopes']}[/dim]\n")
                     continue
-                elif cmd == "/expand":
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) < 2:
-                        console.print("[yellow]Usage: /expand <event_id>[/yellow]\n")
-                        continue
-                    event = agent.expand_trace_event(parts[1].strip())
-                    console.print(f"[dim]{event or 'event not found'}[/dim]\n")
-                    continue
                 elif cmd == "/cleanup":
                     result = agent.cleanup_runtime()
                     console.print(f"[dim]Cleanup: {result}[/dim]\n")
@@ -286,10 +279,6 @@ async def interactive_loop():
 
                     path = DreamEngine(agent.workspace_root).run()
                     console.print(f"[dim]Dream report: {path}[/dim]\n")
-                    continue
-                elif cmd == "/trace":
-                    path = agent.last_trace_path
-                    console.print(f"[dim]Latest trace: {path or 'none'}[/dim]\n")
                     continue
                 elif cmd == "/checkpoint":
                     path = agent.last_checkpoint_path or agent.checkpoints.latest()
@@ -324,6 +313,9 @@ async def interactive_loop():
             console.print("\n[dim]Stopped current turn.[/dim]\n")
             continue
         except EOFError:
+            if agent.session_trace.turns:
+                trace_path = agent.save_session_trace()
+                console.print(f"[dim]Session trace saved: {trace_path}[/dim]")
             console.print("\n[dim]Input closed.[/dim]")
             break
         except Exception as e:
@@ -351,10 +343,8 @@ Interactive commands:
   /rollback Roll back the latest file_write/file_edit change
   /forget   Scoped forget: /forget session|memory|project
   /scope    Switch active memory scopes: /scope user,project,global
-  /expand   Expand a trace event by id
   /cleanup  Cleanup old checkpoints
   /dream    Run a non-mutating Dream review report
-  /trace    Show the latest run trace file
   /checkpoint Show the latest checkpoint file
   /details  Toggle detailed progress
 

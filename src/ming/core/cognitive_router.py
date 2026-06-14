@@ -42,9 +42,15 @@ MULTI_FILE_THRESHOLD = 5
 class RoutingDecision:
     """Result of cognitive route evaluation."""
 
-    def __init__(self, mode: str, triggered_rules: list[str]):
+    def __init__(
+        self,
+        mode: str,
+        triggered_rules: list[str],
+        all_rules_evaluated: dict[str, bool] | None = None,
+    ):
         self.mode = mode  # "single" or "adversarial"
         self.triggered_rules = triggered_rules
+        self.all_rules_evaluated = all_rules_evaluated or {}
 
     @property
     def is_adversarial(self) -> bool:
@@ -76,23 +82,28 @@ class CognitiveRouter:
     ) -> RoutingDecision:
         """Evaluate routing rules. Any hit escalates to adversarial mode."""
         triggered: list[str] = []
+        all_rules: dict[str, bool] = {}
         input_lower = user_input.lower()
 
-        for pattern in IRREVERSIBLE_PATTERNS:
-            if re.search(pattern, input_lower):
-                triggered.append("R1:不可逆")
-                break
+        r1_hit = any(re.search(p, input_lower) for p in IRREVERSIBLE_PATTERNS)
+        all_rules["R1_irreversibility"] = r1_hit
+        if r1_hit:
+            triggered.append("R1:不可逆")
 
-        for pattern in ARCHITECTURAL_PATTERNS:
-            if re.search(pattern, input_lower):
-                triggered.append("R2:架构性")
-                break
+        r2_hit = any(re.search(p, input_lower) for p in ARCHITECTURAL_PATTERNS)
+        all_rules["R2_architectural"] = r2_hit
+        if r2_hit:
+            triggered.append("R2:架构性")
 
         file_refs = re.findall(r"[\w/\\]+\.\w{1,5}", user_input)
-        if len(file_refs) >= MULTI_FILE_THRESHOLD:
+        r3_hit = len(file_refs) >= MULTI_FILE_THRESHOLD
+        all_rules["R3_cross_module"] = r3_hit
+        if r3_hit:
             triggered.append(f"R3:跨模块({len(file_refs)}文件)")
 
-        if context_tokens >= self.context_threshold:
+        r4_hit = context_tokens >= self.context_threshold
+        all_rules["R4_context_rich"] = r4_hit
+        if r4_hit:
             triggered.append(f"R4:上下文充足({context_tokens}tok)")
 
         explicit_keywords = [
@@ -103,18 +114,25 @@ class CognitiveRouter:
             "independent review",
             "再检查",
         ]
-        for keyword in explicit_keywords:
-            if keyword in input_lower:
-                triggered.append("R5:人类显式")
-                break
+        r5_hit = any(kw in input_lower for kw in explicit_keywords)
+        all_rules["R5_explicit_user"] = r5_hit
+        if r5_hit:
+            triggered.append("R5:人类显式")
 
+        all_rules["R6_historical_divergence"] = has_historical_divergence
         if has_historical_divergence:
             triggered.append("R6:历史触发")
 
-        if automaticity < self.automaticity_threshold:
+        r7_hit = automaticity < self.automaticity_threshold
+        all_rules["R7_low_automaticity"] = r7_hit
+        if r7_hit:
             triggered.append(f"R7:Automaticity低({automaticity:.2f})")
 
         mode = "adversarial" if triggered else "single"
-        decision = RoutingDecision(mode=mode, triggered_rules=triggered)
+        decision = RoutingDecision(
+            mode=mode,
+            triggered_rules=triggered,
+            all_rules_evaluated=all_rules,
+        )
         logger.info("CognitiveRouter: %s", decision)
         return decision

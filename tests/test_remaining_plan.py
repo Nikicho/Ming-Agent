@@ -7,7 +7,7 @@ from ming.core.agent import Agent
 from ming.core.llm import LLMResponse, Message
 from ming.core.progress import ProgressAssessment, ToolEvent
 from ming.core.recovery import ErrorClassifier, format_llm_failure, format_tool_stall
-from ming.core.trace import CheckpointStore, RunTrace
+from ming.core.trace import CheckpointStore
 from ming.memory.store import MemoryStore
 from ming.skills.index import SkillIndex, ToolNeedProposal
 from ming.tools.web import WebResearchTool
@@ -212,24 +212,11 @@ async def test_web_research_builds_filtered_evidence_pack(tmp_path):
     assert list(tmp_path.glob("web_research_*.json"))
 
 
-def test_trace_records_observations_and_expands_events(tmp_path):
-    trace = RunTrace("turn-1", "创建文件")
-    trace.add_observation("tool", "file_write produced evidence")
-    trace.tool_events.append({"event_id": "evt-1", "tool_name": "file_write", "output": "hello"})
-
-    path = trace.save(tmp_path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
-
-    assert payload["observations"][0]["summary"] == "file_write produced evidence"
-    assert RunTrace.expand_event(path, "evt-1")["tool_name"] == "file_write"
-
-
 def test_checkpoint_supports_named_resume_and_cleanup(tmp_path):
     store = CheckpointStore(tmp_path)
     first = store.save(
         "turn-a",
         [Message(role="user", content="hello")],
-        tmp_path / "trace-a.json",
         tmp_path / "notes-a.md",
         todo={"items": []},
         changed_files=["a.txt"],
@@ -238,7 +225,6 @@ def test_checkpoint_supports_named_resume_and_cleanup(tmp_path):
     second = store.save(
         "turn-b",
         [Message(role="user", content="bye")],
-        tmp_path / "trace-b.json",
         tmp_path / "notes-b.md",
         todo={"items": []},
         changed_files=[],

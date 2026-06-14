@@ -169,7 +169,7 @@
 
 已落地：
 
-- `RunTrace`：记录 turn_id、tool events、observations、assessments。
+- `SessionTrace`：会话级结构化 trace（ming-trace-v1），记录每轮 gate/step/tool/metrics/feedback。
 - `Observe` 链路：工具结果提取 evidence/blocker/observation 进入 notepad 和 trace。
 - UI tool cards：默认展示摘要，`/details` 和 `/expand <event_id>` 展开 raw detail。
 - `/trace`：查看当前轮/上一轮 trace。
@@ -240,7 +240,7 @@
    - 已落地 scope-aware `/clear` 与 `/forget session|memory|project`。
 
 3. **Trace + Checkpoint**
-   - 已落地 `RunTrace`。
+   - 已落地 `SessionTrace`（替代原 RunTrace，会话级 trace）。
    - 已落地 `.ming/checkpoints/<turn_id>/`。
    - 已落地 `/trace` 与 `/checkpoint`。
    - 已落地 `/resume` 最近 checkpoint 基础恢复。

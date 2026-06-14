@@ -29,9 +29,16 @@ from ming.core.notepad import NotepadStore
 from ming.core.permission import PermissionGate
 from ming.core.progress import ProgressTracker, ToolEvent
 from ming.core.recovery import FileSnapshotStore, format_llm_failure, format_tool_stall
+from ming.core.session_trace import (
+    AdversarialAgentTrace,
+    CompactionEvent,
+    LLMCallMetrics,
+    SessionTrace,
+    ToolCallTrace,
+)
 from ming.core.todo import TodoState
 from ming.core.tool_selection import ToolSelector
-from ming.core.trace import CheckpointStore, RunTrace, new_turn_id
+from ming.core.trace import CheckpointStore, new_turn_id
 from ming.memory.experience import ExperienceStore
 from ming.memory.store import MemoryStore
 from ming.tools.base import ToolRegistry, ToolResult
@@ -114,9 +121,11 @@ class Agent:
         self.tool_selector = ToolSelector()
         self.notepad = NotepadStore(self.workspace_root / ".ming" / "scratch")
         self.checkpoints = CheckpointStore(self.workspace_root / ".ming" / "checkpoints")
-        self.trace_root = self.workspace_root / ".ming" / "traces"
         self.snapshots = FileSnapshotStore(self.workspace_root / ".ming" / "snapshots")
-        self.last_trace_path: Path | None = None
+        self.session_trace = SessionTrace(
+            model=self.config.llm.model,
+            agent_version=self._get_version(),
+        )
         self.last_checkpoint_path: Path | None = None
         self.current_turn_id = ""
         self.active_context_scopes = ["user", "project", "global"]
@@ -137,11 +146,11 @@ class Agent:
     async def chat(self, user_input: str, turn_id: str | None = None) -> str:
         """Process user input through the full pipeline."""
         logger.debug(f"User input: {user_input[:100]}...")
-        trace = RunTrace(turn_id or new_turn_id(), user_input)
-        self.current_turn_id = trace.turn_id
+        self.current_turn_id = turn_id or new_turn_id()
+        self.session_trace.begin_turn(self.current_turn_id, user_input)
         self._emit_progress("context", "准备上下文")
         todo = TodoState.from_user_input(user_input)
-        notepad_path = self.notepad.create(trace.turn_id, user_input)
+        notepad_path = self.notepad.create(self.current_turn_id, user_input)
         self.notepad.add_assumption(notepad_path, "本轮只把高信号工作台信息注入上下文。")
         self.context.set_instant_context(self._build_instant_context(user_input))
         self.context.set_turn_workbench(todo=todo.to_context(), notepad_path=notepad_path)
@@ -152,20 +161,29 @@ class Agent:
         # Check compaction before proceeding
         if self.context.needs_compaction():
             logger.info("Context approaching limit, running compaction...")
-            await self._run_compaction()
+            await self._run_compaction(trigger="threshold")
 
         # Cognitive routing
         automaticity = self.automaticity.get_automaticity(user_input)
         logger.debug(f"Automaticity for input: {automaticity:.2f}")
+        context_tokens = self.context.current_tokens()
         routing_decision = self.cognitive_router.evaluate(
             user_input=user_input,
-            context_tokens=self.context.current_tokens(),
+            context_tokens=context_tokens,
             automaticity=automaticity,
             has_historical_divergence=self.experience.has_historical_divergence(user_input),
         )
         logger.info(f"CognitiveRouter decision: {routing_decision}")
         route_message = "进入对抗分析" if routing_decision.is_adversarial else "使用单核执行"
         self._emit_progress("route", route_message, detail=str(routing_decision.triggered_rules))
+
+        self.session_trace.record_gate(
+            mode=routing_decision.mode,
+            triggered_rules=routing_decision.triggered_rules,
+            all_rules=routing_decision.all_rules_evaluated,
+            automaticity=automaticity,
+            context_tokens=context_tokens,
+        )
 
         # Route based on cognitive router decision
         if routing_decision.is_adversarial:
@@ -175,34 +193,71 @@ class Agent:
             except Exception as e:
                 logger.error(f"Adversarial mode failed: {e}", exc_info=True)
                 logger.info("Falling back to single-agent mode (L3 recovery)")
-                return await self._run_single(user_input, trace, todo, notepad_path)
+                return await self._run_single(user_input, todo=todo, notepad_path=notepad_path)
+            # Record adversarial trace
+            adv_trace = AdversarialAgentTrace(
+                alpha_output_length=len(result.alpha_output),
+                alpha_metrics=LLMCallMetrics.from_usage(
+                    result.metrics.alpha_usage, result.metrics.alpha_latency_ms
+                ),
+                beta_output_length=len(result.beta_output),
+                beta_metrics=LLMCallMetrics.from_usage(
+                    result.metrics.beta_usage, result.metrics.beta_latency_ms
+                ),
+                gamma_phase1_consistency=result.consistency,
+                gamma_phase1_metrics=LLMCallMetrics.from_usage(
+                    result.metrics.gamma_phase1_usage, result.metrics.gamma_phase1_latency_ms
+                ),
+                gamma_phase2_ran=result.metrics.gamma_phase2_ran,
+                gamma_phase2_metrics=LLMCallMetrics.from_usage(
+                    result.metrics.gamma_phase2_usage, result.metrics.gamma_phase2_latency_ms
+                ),
+                tier_signal=result.tier_signal,
+                total_latency_ms=result.metrics.total_latency_ms,
+            )
+            self.session_trace.record_adversarial(adv_trace)
+            # Aggregate LLM call metrics for the turn
+            for usage, latency in [
+                (result.metrics.alpha_usage, result.metrics.alpha_latency_ms),
+                (result.metrics.beta_usage, result.metrics.beta_latency_ms),
+                (result.metrics.gamma_phase1_usage, result.metrics.gamma_phase1_latency_ms),
+            ]:
+                self.session_trace.record_llm_call(usage, latency)
+            if result.metrics.gamma_phase2_ran:
+                self.session_trace.record_llm_call(
+                    result.metrics.gamma_phase2_usage, result.metrics.gamma_phase2_latency_ms
+                )
+
             # Update automaticity with tier signal
+            auto_before = automaticity
             self.automaticity.update(user_input, result.tier_signal)
+            auto_after = self.automaticity.get_automaticity(user_input)
             self.experience.record(user_input, result.tier_signal, "adversarial")
+            self.session_trace.record_feedback(auto_before, auto_after, result.tier_signal)
+
             self.context.add_message(Message(role="assistant", content=result.final_output))
             logger.info(
                 "Adversarial result: consistency=%s, tier=%s",
                 result.consistency,
                 result.tier_signal,
             )
-            return self._finish_turn(result.final_output, trace, todo, notepad_path)
+            return self._finish_turn(result.final_output, todo, notepad_path)
         else:
-            return await self._run_single(user_input, trace, todo, notepad_path)
+            return await self._run_single(user_input, todo=todo, notepad_path=notepad_path)
 
     async def _run_single(
         self,
         user_input: str,
-        trace: RunTrace | None = None,
         todo: TodoState | None = None,
         notepad_path: Path | None = None,
     ) -> str:
         """Run single-agent mode (α_LOOP)."""
-        if trace is None:
-            trace = RunTrace(new_turn_id(), user_input)
         if todo is None:
             todo = TodoState.from_user_input(user_input)
         if notepad_path is None:
-            notepad_path = self.notepad.create(trace.turn_id, user_input)
+            notepad_path = self.notepad.create(self.current_turn_id, user_input)
+
+        self.session_trace.init_single_path()
 
         iteration = 0
         turn_start = time.time()
@@ -224,24 +279,28 @@ class Agent:
 
             # L5 ceiling: iteration limit
             if iteration > self.config.agent.max_iterations:
+                self.session_trace.record_l5_ceiling("iteration_limit")
                 msg = f"[Ming: 达到迭代上限 {self.config.agent.max_iterations}，停止执行]"
                 self.context.add_message(Message(role="assistant", content=msg))
-                return self._finish_turn(msg, trace, todo, notepad_path)
+                return self._finish_turn(msg, todo, notepad_path)
 
             # L5 ceiling: wall-clock timeout
             elapsed = time.time() - turn_start
             if self.config.agent.max_seconds > 0 and elapsed > self.config.agent.max_seconds:
+                self.session_trace.record_l5_ceiling("timeout")
                 msg = f"[Ming: 超时 {self.config.agent.max_seconds}s，停止执行]"
                 self.context.add_message(Message(role="assistant", content=msg))
-                return self._finish_turn(msg, trace, todo, notepad_path)
+                return self._finish_turn(msg, todo, notepad_path)
 
             # Safety compaction check mid-loop
             if self.context.needs_safety_compaction():
                 logger.warning("Safety compaction triggered mid-loop")
-                await self._run_compaction()
+                await self._run_compaction(trigger="safety")
 
             # Call LLM
             self._emit_progress("llm", f"调用模型，第 {iteration} 轮")
+            self.session_trace.begin_step(iteration)
+            llm_t0 = time.monotonic()
             try:
                 response: LLMResponse = await call_llm(
                     messages=self.context.get_messages(),
@@ -251,24 +310,27 @@ class Agent:
             except asyncio.CancelledError:
                 msg = "[Ming: 已停止本轮思考]"
                 self._emit_progress("cancelled", "已停止本轮思考")
-                trace.add_observation("cancelled", "用户停止了当前 agent-loop。")
                 self.notepad.add_blocker(notepad_path, "用户停止了当前 agent-loop。")
                 self.context.add_message(Message(role="assistant", content=msg))
-                return self._finish_turn(msg, trace, todo, notepad_path, complete_todo=False)
+                return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
             except Exception as exc:
                 logger.error("LLM call failed", exc_info=True)
                 failure = format_llm_failure(exc)
                 msg = failure.user_message
                 self._emit_progress("error", "模型调用失败", detail=failure.user_message)
-                trace.add_observation("llm_error", failure.technical_detail)
                 self.notepad.add_blocker(notepad_path, f"llm_error: {failure.technical_detail}")
                 self.context.add_message(Message(role="assistant", content=msg))
-                return self._finish_turn(msg, trace, todo, notepad_path, complete_todo=False)
+                return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
+
+            llm_latency_ms = int((time.monotonic() - llm_t0) * 1000)
+            step_metrics = LLMCallMetrics.from_usage(response.usage, llm_latency_ms)
+            self.session_trace.record_llm_call(response.usage, llm_latency_ms)
 
             # Case 1: Tool calls → execute and loop
             if response.tool_calls:
                 used_tools = True
                 replan_requested = False
+                step_tool_traces: list[ToolCallTrace] = []
                 self.context.add_message(Message(
                     role="assistant",
                     content=response.content,
@@ -303,6 +365,18 @@ class Agent:
                         # L1: Normal execution (harness handles transient retries via LiteLLM)
                         result = await self._execute_permitted_tool(tool_name, tool_args)
 
+                    tool_latency_ms = int((time.monotonic() - llm_t0) * 1000) - llm_latency_ms
+                    step_tool_traces.append(ToolCallTrace(
+                        id=tc["id"],
+                        name=tool_name,
+                        arguments=tool_args,
+                        loop_status=loop_status,
+                        consecutive_identical=self.loop_detector._consecutive_identical,
+                        result_output_length=len(result.output),
+                        result_is_error=result.is_error,
+                        latency_ms=max(0, tool_latency_ms),
+                    ))
+
                     logger.info(
                         "Tool: %s → %s (%s chars)",
                         tool_name,
@@ -317,8 +391,6 @@ class Agent:
                         is_error=result.is_error,
                     )
                     assessment = self.progress_tracker.record(event)
-                    trace.add_tool_event(event)
-                    trace.add_assessment(assessment.decision, assessment.reason)
                     self.notepad.add_tool_observation(
                         notepad_path,
                         f"tool={tool_name} status={event.status} progress={event.progress}",
@@ -328,12 +400,10 @@ class Agent:
                             notepad_path,
                             f"{tool_name}: {result.output[:300]}",
                         )
-                        trace.add_observation("tool_error", f"{tool_name}: {result.output[:200]}")
                     elif event.evidence_count > 0:
                         evidence = f"{tool_name}: {result.output[:500]}"
                         self.notepad.add_evidence(notepad_path, tool_name, result.output[:500])
                         self.context.pin_evidence(evidence)
-                        trace.add_observation("evidence", evidence)
                     todo.mark_step_completed(tool_name)
                     self.context.set_turn_workbench(
                         todo=todo.to_context(),
@@ -350,13 +420,12 @@ class Agent:
                     if assessment.decision == "stop":
                         failure = format_tool_stall(assessment, self.progress_tracker.events)
                         msg = failure.user_message
-                        trace.add_observation("tool_stall", failure.technical_detail)
                         self.notepad.add_blocker(
                             notepad_path,
                             f"tool_stall: {failure.technical_detail}",
                         )
                         self.context.add_message(Message(role="assistant", content=msg))
-                        return self._finish_turn(msg, trace, todo, notepad_path)
+                        return self._finish_turn(msg, todo, notepad_path)
 
                     if (
                         assessment.decision == "replan"
@@ -372,11 +441,18 @@ class Agent:
                             "工具调用策略失败，切换执行方式",
                             detail=assessment.reason,
                         )
-                        trace.add_observation("tool_replan", replan_prompt)
                         self.notepad.add_blocker(notepad_path, f"tool_replan: {assessment.reason}")
                         self.context.add_message(Message(role="user", content=replan_prompt))
                         replan_requested = True
                         break
+
+                self.session_trace.finish_step(
+                    iteration=iteration,
+                    response_content_length=len(response.content),
+                    tool_calls=step_tool_traces,
+                    is_final=False,
+                    metrics=step_metrics,
+                )
 
                 if replan_requested:
                     continue
@@ -384,14 +460,36 @@ class Agent:
                 continue
 
             # Case 2: Done (no tool calls)
+            self.session_trace.finish_step(
+                iteration=iteration,
+                response_content_length=len(response.content),
+                tool_calls=[],
+                is_final=True,
+                metrics=step_metrics,
+            )
             final_content = self._strip_final_marker(response.content)
 
             if not used_tools:
                 self._emit_progress("verify", "执行 T1 自检")
+                t1_t0 = time.monotonic()
                 final_content, tier_signal = await self._run_t1_self_check(final_content)
+                t1_latency = int((time.monotonic() - t1_t0) * 1000)
+                self.session_trace.record_t1_check(
+                    draft_changed=(tier_signal == "T1_caught"),
+                    tier_signal=tier_signal,
+                    metrics=LLMCallMetrics(latency_ms=t1_latency),
+                )
             else:
                 self._emit_progress("verify", "执行 T3 核验")
+                t3_t0 = time.monotonic()
                 tier_signal = await self._run_t3_fact_check(user_input, final_content)
+                t3_latency = int((time.monotonic() - t3_t0) * 1000)
+                self.session_trace.record_t3_check(
+                    passed=(tier_signal == "T3_pass"),
+                    tier_signal=tier_signal,
+                    repair_attempted=t3_repair_attempted,
+                    metrics=LLMCallMetrics(latency_ms=t3_latency),
+                )
                 if tier_signal == "T3_error" and not t3_repair_attempted:
                     t3_repair_attempted = True
                     self.context.add_message(
@@ -408,10 +506,13 @@ class Agent:
             self.context.add_message(Message(role="assistant", content=final_content))
             self._maybe_encode_explicit_memory(user_input)
 
+            auto_before = self.automaticity.get_automaticity(user_input)
             self.automaticity.update(user_input, tier_signal)
+            auto_after = self.automaticity.get_automaticity(user_input)
             self.experience.record(user_input, tier_signal, "single")
+            self.session_trace.record_feedback(auto_before, auto_after, tier_signal)
 
-            return self._finish_turn(final_content, trace, todo, notepad_path)
+            return self._finish_turn(final_content, todo, notepad_path)
 
     async def _execute_permitted_tool(self, tool_name: str, tool_args: str) -> ToolResult:
         decision = self.permission_gate.evaluate(tool_name, tool_args)
@@ -451,14 +552,7 @@ class Agent:
             if not (message.role == "system" and message.content in base_content)
         ]
         self.last_checkpoint_path = path
-        trace_path = payload.get("trace_path")
-        self.last_trace_path = Path(trace_path) if trace_path else None
         return payload
-
-    def expand_trace_event(self, event_id: str) -> dict | None:
-        if self.last_trace_path is None:
-            return None
-        return RunTrace.expand_event(self.last_trace_path, event_id)
 
     def cleanup_runtime(self, keep_checkpoints: int = 20) -> dict[str, int]:
         return {"checkpoints_removed": self.checkpoints.cleanup(keep=keep_checkpoints)}
@@ -466,28 +560,26 @@ class Agent:
     def _finish_turn(
         self,
         final_output: str,
-        trace: RunTrace,
         todo: TodoState,
         notepad_path: Path,
         complete_todo: bool = True,
     ) -> str:
         if complete_todo:
             todo.complete_all()
-        trace.final_output = final_output
-        trace_path = trace.save(self.trace_root)
         checkpoint_path = self.checkpoints.save(
-            trace.turn_id,
+            self.current_turn_id,
             self.context.get_messages(),
-            trace_path,
             notepad_path,
             todo,
         )
-        self.last_trace_path = trace_path
         self.last_checkpoint_path = checkpoint_path
+
+        self.session_trace.finish_turn(final_output)
+
         self._emit_progress(
             "done",
             "完成本轮响应",
-            detail=f"trace={trace_path}; checkpoint={checkpoint_path}",
+            detail=f"checkpoint={checkpoint_path}",
         )
         return final_output
 
@@ -539,19 +631,41 @@ class Agent:
             config=self.config.llm,
         )
 
-    async def _run_compaction(self) -> None:
+    async def _run_compaction(self, trigger: str = "manual") -> None:
         """Run context compaction with LLM summarization."""
+        tokens_before = self.context.current_tokens()
+        messages_before = len(self.context.dialog_history)
+
         async def _compact_llm_call(messages, config=None):
             return await call_llm(
                 messages=messages,
                 config=config or self.config.llm,
             )
 
+        compact_t0 = time.monotonic()
         await self.context.compact(_compact_llm_call)
+        compact_latency = int((time.monotonic() - compact_t0) * 1000)
+
+        tokens_after = self.context.current_tokens()
+        messages_after = len(self.context.dialog_history)
+        ratio = round(tokens_after / max(tokens_before, 1), 2)
+
+        self.session_trace.record_compaction(CompactionEvent(
+            timestamp=datetime.now().isoformat(timespec="seconds"),
+            trigger=trigger,
+            before_tokens=tokens_before,
+            after_tokens=tokens_after,
+            compression_ratio=ratio,
+            messages_before=messages_before,
+            messages_after=messages_after,
+            phase1_messages_pruned=max(0, messages_before - messages_after),
+            phase2_ran=True,
+            phase2_metrics=LLMCallMetrics(latency_ms=compact_latency),
+        ))
 
     async def compact_now(self) -> None:
         """Public CLI hook for manual compaction."""
-        await self._run_compaction()
+        await self._run_compaction(trigger="manual")
 
     def clear_dialog(self) -> int:
         """Clear current dialog while preserving loaded memory/session context."""
@@ -678,6 +792,18 @@ class Agent:
         if stripped.startswith("最终："):
             return stripped.split("：", 1)[1].strip()
         return content
+
+    def save_session_trace(self) -> Path:
+        """Save the accumulated session trace to disk."""
+        return self.session_trace.save(self.workspace_root / ".ming" / "session_traces")
+
+    @staticmethod
+    def _get_version() -> str:
+        try:
+            from ming import __version__
+            return __version__
+        except Exception:
+            return "unknown"
 
     def chat_sync(self, user_input: str) -> str:
         """Synchronous wrapper."""

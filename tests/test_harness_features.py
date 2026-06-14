@@ -84,19 +84,17 @@ async def test_agent_persists_trace_checkpoint_todo_and_notepad(tmp_path, monkey
     result = await agent.chat("创建 out.txt")
 
     assert result == "已写入 out.txt"
-    trace_files = list((tmp_path / ".ming" / "traces").glob("*.json"))
     checkpoint_files = list((tmp_path / ".ming" / "checkpoints").glob("*/checkpoint.json"))
     note_files = list((tmp_path / ".ming" / "scratch").glob("*/notes.md"))
 
-    assert len(trace_files) == 1
     assert len(checkpoint_files) == 1
     assert len(note_files) == 1
     assert "创建 out.txt" in note_files[0].read_text(encoding="utf-8")
 
-    trace = json.loads(trace_files[0].read_text(encoding="utf-8"))
-    assert trace["tool_events"][0]["tool_name"] == "file_write"
-    assert trace["final_output"] == "已写入 out.txt"
-
     checkpoint = json.loads(checkpoint_files[0].read_text(encoding="utf-8"))
     assert checkpoint["todo"]["items"][0]["status"] == "completed"
-    assert checkpoint["trace_path"].endswith(".json")
+
+    session_trace = agent.session_trace.to_dict()
+    assert session_trace["turns"][0]["final_output"] == "已写入 out.txt"
+    tool_call = session_trace["turns"][0]["single_agent"]["steps"][0]["tool_calls"][0]
+    assert tool_call["name"] == "file_write"

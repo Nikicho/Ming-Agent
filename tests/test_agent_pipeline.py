@@ -290,7 +290,8 @@ async def test_agent_accepts_external_turn_id_for_web_runtime(tmp_path, monkeypa
 
     assert result == "ok"
     assert {event.turn_id for event in events} == {"turn-web-1"}
-    assert (tmp_path / ".ming" / "traces" / "turn-web-1.json").exists()
+    checkpoint_files = list((tmp_path / ".ming" / "checkpoints").glob("*/checkpoint.json"))
+    assert checkpoint_files
 
 
 @pytest.mark.asyncio
@@ -311,13 +312,10 @@ async def test_agent_returns_graceful_message_and_trace_on_llm_failure(tmp_path,
 
     assert "模型调用失败" in result
     assert "provider disconnected" not in result
-    trace_files = list((tmp_path / ".ming" / "traces").glob("*.json"))
     checkpoint_files = list((tmp_path / ".ming" / "checkpoints").glob("*/checkpoint.json"))
-    assert trace_files
     assert checkpoint_files
-    trace_text = trace_files[0].read_text(encoding="utf-8")
-    assert "llm_error" in trace_text
-    assert "provider disconnected" in trace_text
+    session = agent.session_trace.to_dict()
+    assert "模型调用失败" in session["turns"][0]["final_output"]
 
 
 @pytest.mark.asyncio
@@ -337,8 +335,5 @@ async def test_agent_saves_cancelled_turn_when_user_stops_thinking(tmp_path, mon
     result = await agent.chat("帮我写一个番茄钟页面")
 
     assert "已停止本轮思考" in result
-    trace_files = list((tmp_path / ".ming" / "traces").glob("*.json"))
-    assert trace_files
-    trace_text = trace_files[0].read_text(encoding="utf-8")
-    assert "cancelled" in trace_text
-    assert "completed" not in trace_text
+    checkpoint_files = list((tmp_path / ".ming" / "checkpoints").glob("*/checkpoint.json"))
+    assert checkpoint_files

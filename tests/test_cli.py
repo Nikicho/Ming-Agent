@@ -17,7 +17,6 @@ def test_main_prints_help_without_entering_interactive(capsys):
     assert "/rewind" in output
     assert "/resume" in output
     assert "/scope" in output
-    assert "/expand" in output
     assert "/cleanup" in output
     assert "python -m ming ui" in output
     assert "python -m ming dream" in output
