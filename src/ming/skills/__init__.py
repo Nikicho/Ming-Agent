@@ -1,0 +1,1 @@
+"""Skill metadata index."""

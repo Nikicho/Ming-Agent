@@ -8,8 +8,10 @@ Layers (stable → dynamic, cache-friendly order):
 """
 
 import logging
+from pathlib import Path
 from typing import Any
 
+from ming.context.assembler import ContextAssembler, ContextAssemblyInput
 from ming.core.llm import Message
 
 logger = logging.getLogger("ming")
@@ -40,7 +42,14 @@ class ContextManager:
         # Layer contents
         self.base_layer: list[Message] = []      # system prompt (set once)
         self.session_layer: list[Message] = []   # memories, project context
+        self.instant_layer: list[Message] = []   # current turn instructions
         self.dialog_history: list[Message] = []  # conversation turns
+        self.turn_todo: str = ""
+        self.turn_notepad_path: Path | None = None
+        self.turn_tool_names: list[str] = []
+        self.pinned_evidence: list[str] = []
+        self.last_compaction_verified = False
+        self.assembler = ContextAssembler()
         self._compaction_count = 0
 
     def set_base(self, system_prompt: str) -> None:
@@ -53,13 +62,79 @@ class ContextManager:
             Message(role="system", content=f"[{label}]\n{content}")
         )
 
+    def replace_session_context(self, content: str, label: str = "context") -> int:
+        """Replace session-layer context with the same label."""
+        prefix = f"[{label}]"
+        before = len(self.session_layer)
+        self.session_layer = [
+            message for message in self.session_layer if not message.content.startswith(prefix)
+        ]
+        removed = before - len(self.session_layer)
+        if content:
+            self.add_session_context(content, label=label)
+        return removed
+
+    def set_instant_context(self, content: str) -> None:
+        """Set per-turn instant context."""
+        self.instant_layer = [Message(role="system", content=content)] if content else []
+
+    def clear_instant_context(self) -> int:
+        """Clear current turn instant/workbench context."""
+        removed = len(self.instant_layer)
+        self.instant_layer = []
+        self.turn_todo = ""
+        self.turn_notepad_path = None
+        self.turn_tool_names = []
+        return removed
+
+    def set_turn_workbench(
+        self,
+        *,
+        todo: str = "",
+        notepad_path: str | Path | None = None,
+        tool_names: list[str] | None = None,
+    ) -> None:
+        """Set transient per-turn workbench context."""
+        self.turn_todo = todo
+        self.turn_notepad_path = Path(notepad_path) if notepad_path else None
+        self.turn_tool_names = list(tool_names or [])
+
+    def pin_evidence(self, evidence: str) -> None:
+        """Pin compact evidence so pruning/summarization keeps it visible."""
+        text = evidence.strip()
+        if text and text not in self.pinned_evidence:
+            self.pinned_evidence.append(text)
+
     def add_message(self, message: Message) -> None:
         """Add a message to dialog history."""
         self.dialog_history.append(message)
 
+    def clear_dialog(self) -> int:
+        """Clear dialog history while preserving base/session context."""
+        removed = len(self.dialog_history)
+        self.dialog_history = []
+        return removed
+
+    def clear_session_context(self) -> int:
+        """Clear session-layer context for the current process only."""
+        removed = len(self.session_layer)
+        self.session_layer = []
+        return removed
+
     def get_messages(self) -> list[Message]:
-        """Assemble the full context: base + session + dialog."""
-        return self.base_layer + self.session_layer + self.dialog_history
+        """Assemble the full context through ContextAssembler."""
+        return self.assembler.assemble(
+            ContextAssemblyInput(
+                base=self.base_layer,
+                session=self.session_layer,
+                dialog=self.dialog_history,
+                instant="\n".join(m.content for m in self.instant_layer),
+                todo=self.turn_todo,
+                notepad_path=self.turn_notepad_path,
+                tool_names=self.turn_tool_names,
+                pinned_evidence=self.pinned_evidence,
+            )
+        )
 
     def current_tokens(self) -> int:
         """Estimate current total token usage."""
@@ -110,12 +185,15 @@ class ContextManager:
             return  # Not enough old messages to summarize
 
         # Build summarization request
+        pinned_block = "\n".join(self.pinned_evidence)
         summary_prompt = (
             "Summarize the following conversation concisely. Preserve:\n"
             "- Key decisions made\n"
             "- Unresolved questions\n"
             "- Important file paths and code changes\n"
-            "- User preferences expressed\n\n"
+            "- User preferences expressed\n"
+            "- All pinned evidence listed below\n\n"
+            f"[pinned evidence]\n{pinned_block}\n\n"
             "Format as a structured summary under 500 words."
         )
 
@@ -127,7 +205,6 @@ class ContextManager:
         ]
 
         try:
-            from ming.config import LLMConfig
             response = await llm_call(
                 messages=summary_messages,
                 config=llm_call.__self__ if hasattr(llm_call, '__self__') else None,
@@ -138,11 +215,29 @@ class ContextManager:
             summary_text = "\n".join(
                 f"[{m.role}]: {m.content[:100]}" for m in old_messages[-10:] if m.content
             )
+        missing_evidence = [
+            evidence for evidence in self.pinned_evidence if evidence not in summary_text
+        ]
+        self.last_compaction_verified = not missing_evidence
+        if missing_evidence:
+            summary_text = (
+                "[Pinned evidence preserved after compaction]\n"
+                + "\n".join(missing_evidence)
+                + "\n\n"
+                + summary_text
+            )
 
         # Replace old messages with summary
         summary_msg = Message(
             role="system",
-            content=f"[Conversation summary (compacted from {len(old_messages)} messages)]\n{summary_text}",
+            content=(
+                f"[Conversation summary (compacted from {len(old_messages)} messages)]\n"
+                f"{summary_text}"
+            ),
         )
         self.dialog_history = [summary_msg] + recent_messages
-        logger.info(f"  Compacted: {len(old_messages)} old → 1 summary + {len(recent_messages)} recent")
+        logger.info(
+            "  Compacted: %s old → 1 summary + %s recent",
+            len(old_messages),
+            len(recent_messages),
+        )

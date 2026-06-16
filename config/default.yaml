@@ -14,6 +14,8 @@ llm:
   temperature: 0.3
   # Max output tokens per LLM call
   max_tokens: 4096
+  # Timeout for each model request, in seconds
+  request_timeout_seconds: 90
 
 # Context management
 context:

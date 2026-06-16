@@ -5,11 +5,12 @@ Provides retrieval for context assembly.
 """
 
 import logging
-import os
+from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import yaml
+
+from ming.core.llm import Message
 
 logger = logging.getLogger("ming")
 
@@ -17,14 +18,31 @@ logger = logging.getLogger("ming")
 class MemoryEntry:
     """A single memory entry."""
 
-    def __init__(self, name: str, description: str, mem_type: str, content: str, file_path: str = ""):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        mem_type: str,
+        content: str,
+        file_path: str = "",
+        stale: bool = False,
+        stale_reason: str = "",
+    ):
         self.name = name
         self.description = description
         self.type = mem_type
         self.content = content
         self.file_path = file_path
+        self.stale = stale
+        self.stale_reason = stale_reason
 
     def to_context_string(self) -> str:
+        if self.stale:
+            reason = f" stale_reason={self.stale_reason}" if self.stale_reason else ""
+            return (
+                f"[待复核记忆:{self.type}: {self.name}{reason}] "
+                f"{self.description}\n{self.content}"
+            )
         return f"[{self.type}: {self.name}] {self.description}\n{self.content}"
 
 
@@ -72,6 +90,8 @@ class MemoryStore:
             mem_type=meta.get("type", "unknown"),
             content=parts[2].strip(),
             file_path=str(path),
+            stale=bool(meta.get("stale", False)),
+            stale_reason=str(meta.get("stale_reason", "")),
         )
 
     def save(self, name: str, description: str, mem_type: str, content: str) -> Path:
@@ -92,6 +112,44 @@ class MemoryStore:
         logger.info(f"Memory saved: {name} ({mem_type})")
         return path
 
+    def extract_session_summary(self, messages: list[Message]) -> list[Path]:
+        """Extract simple user/project memories from a session transcript."""
+        saved: list[Path] = []
+        combined = "\n".join(message.content for message in messages if message.content)
+        if "记住" in combined or "偏好" in combined:
+            saved.append(
+                self.save(
+                    name=f"user_summary_{datetime.now():%Y%m%d_%H%M%S}",
+                    description="session user preference",
+                    mem_type="user",
+                    content=combined[:1000],
+                )
+            )
+        if any(token in combined for token in ["项目结构", "src/", "src\\", "常用命令"]):
+            saved.append(
+                self.save(
+                    name=f"project_summary_{datetime.now():%Y%m%d_%H%M%S}",
+                    description="session project facts",
+                    mem_type="project",
+                    content=combined[:1000],
+                )
+            )
+        return saved
+
+    def mark_stale(self, path: str | Path, reason: str) -> None:
+        """Mark a memory file as stale for later reconsolidation."""
+        memory_path = Path(path)
+        text = memory_path.read_text(encoding="utf-8", errors="replace")
+        if not text.startswith("---"):
+            return
+        parts = text.split("---", 2)
+        meta = yaml.safe_load(parts[1]) or {}
+        meta["stale"] = True
+        meta["stale_reason"] = reason
+        frontmatter = yaml.dump(meta, allow_unicode=True, default_flow_style=False)
+        memory_path.write_text(f"---\n{frontmatter}---{parts[2]}", encoding="utf-8")
+        self._load_all()
+
     def search(self, query: str, max_results: int = 5) -> list[MemoryEntry]:
         """Simple keyword search across memories."""
         query_lower = query.lower()
@@ -106,12 +164,63 @@ class MemoryStore:
             if score > 0:
                 scored.append((score, entry))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
+        scored.sort(key=lambda x: (x[0], not x[1].stale), reverse=True)
         return [entry for _, entry in scored[:max_results]]
 
     def get_all(self) -> list[MemoryEntry]:
         """Return all memory entries."""
         return list(self._entries)
+
+    def get_by_types(self, mem_types: list[str]) -> list[MemoryEntry]:
+        """Return memories matching the requested scopes/types."""
+        wanted = set(mem_types)
+        entries = [entry for entry in self._entries if entry.type in wanted]
+        return sorted(entries, key=lambda entry: entry.stale)
+
+    def get_stale(self) -> list[MemoryEntry]:
+        """Return memories marked as needing review."""
+        return [entry for entry in self._entries if entry.stale]
+
+    def mark_fresh(self, path: str | Path) -> None:
+        """Clear stale markers after a memory has been manually reviewed."""
+        memory_path = Path(path)
+        text = memory_path.read_text(encoding="utf-8", errors="replace")
+        if not text.startswith("---"):
+            return
+        parts = text.split("---", 2)
+        meta = yaml.safe_load(parts[1]) or {}
+        meta.pop("stale", None)
+        meta.pop("stale_reason", None)
+        frontmatter = yaml.dump(meta, allow_unicode=True, default_flow_style=False)
+        memory_path.write_text(f"---\n{frontmatter}---{parts[2]}", encoding="utf-8")
+        self._load_all()
+
+    def get_scoped_context(self, mem_types: list[str], max_chars: int = 5000) -> str:
+        """Build context from selected memory scopes only."""
+        entries = self.get_by_types(mem_types)
+        parts = []
+        total = 0
+        for entry in entries:
+            text = entry.to_context_string()
+            if total + len(text) > max_chars:
+                break
+            parts.append(text)
+            total += len(text)
+        return "\n\n".join(parts)
+
+    def delete_by_type(self, mem_type: str) -> int:
+        """Delete persisted memories of the given type."""
+        removed = 0
+        for entry in list(self._entries):
+            if entry.type != mem_type or not entry.file_path:
+                continue
+            path = Path(entry.file_path)
+            if path.exists() and path.is_file():
+                path.unlink()
+                removed += 1
+        if removed:
+            self._load_all()
+        return removed
 
     def get_session_context(self, max_chars: int = 5000) -> str:
         """Build session-layer context string from all memories."""

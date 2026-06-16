@@ -1,0 +1,60 @@
+from ming.core.live_events import LiveEventStore
+
+
+def test_live_event_store_appends_sequence_and_reads_since(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+
+    first = store.append(stage="context", message="准备上下文", turn_id="turn-1")
+    second = store.append(stage="tool", message="执行工具 file_write", turn_id="turn-1")
+
+    assert first["seq"] == 1
+    assert second["seq"] == 2
+    assert [event["stage"] for event in store.since(0)] == ["context", "tool"]
+    assert [event["stage"] for event in store.since(1)] == ["tool"]
+
+
+def test_live_event_store_tolerates_bad_lines(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+    store.path.parent.mkdir(parents=True)
+    store.path.write_text("{bad json}\n", encoding="utf-8")
+
+    event = store.append(stage="done", message="完成", turn_id="turn-2")
+
+    assert event["seq"] == 1
+    assert store.since(0)[0]["stage"] == "done"
+
+
+def test_live_event_store_adds_schema_version(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+
+    event = store.append(stage="context", message="prepare", turn_id="turn-1")
+
+    assert event["schema_version"] == 1
+    assert store.since(0)[0]["schema_version"] == 1
+
+
+def test_live_event_store_rotates_old_events(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live", max_events=2)
+
+    store.append(stage="context", message="one")
+    second = store.append(stage="llm", message="two")
+    third = store.append(stage="done", message="three")
+
+    events = store.since(0)
+    assert [event["seq"] for event in events] == [second["seq"], third["seq"]]
+    assert [event["message"] for event in events] == ["two", "three"]
+
+
+def test_live_event_store_redacts_api_key_like_values(tmp_path):
+    store = LiveEventStore(tmp_path / ".ming" / "live")
+
+    event = store.append(
+        stage="error",
+        message="failed with api_key=sk-1234567890abcdef",
+        detail="Authorization: Bearer secret-token-123456",
+    )
+
+    assert "sk-1234567890abcdef" not in event["message"]
+    assert "secret-token-123456" not in event["detail"]
+    assert "[redacted]" in event["message"]
+    assert "[redacted]" in event["detail"]

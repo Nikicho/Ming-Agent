@@ -24,7 +24,10 @@ class FileReadTool(Tool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Path to the file to read."},
-                "offset": {"type": "integer", "description": "Line number to start from (0-based). Default 0."},
+                "offset": {
+                    "type": "integer",
+                    "description": "Line number to start from (0-based). Default 0.",
+                },
                 "limit": {"type": "integer", "description": "Max lines to read. Default all."},
             },
             "required": ["path"],
@@ -33,7 +36,13 @@ class FileReadTool(Tool):
     def __init__(self, working_dir: str | None = None):
         self.working_dir = working_dir or os.getcwd()
 
-    async def execute(self, path: str, offset: int = 0, limit: int | None = None, **_: Any) -> ToolResult:
+    async def execute(
+        self,
+        path: str,
+        offset: int = 0,
+        limit: int | None = None,
+        **_: Any,
+    ) -> ToolResult:
         full_path = Path(self.working_dir) / path if not os.path.isabs(path) else Path(path)
 
         if not full_path.exists():
@@ -68,7 +77,10 @@ class FileWriteTool(Tool):
 
     @property
     def description(self) -> str:
-        return "Write content to a file. Creates the file if it doesn't exist, overwrites if it does."
+        return (
+            "Write content to a file. Creates the file if it doesn't exist, "
+            "overwrites if it does."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -113,7 +125,10 @@ class FileEditTool(Tool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Path to the file to edit."},
-                "old_string": {"type": "string", "description": "Exact string to find and replace."},
+                "old_string": {
+                    "type": "string",
+                    "description": "Exact string to find and replace.",
+                },
                 "new_string": {"type": "string", "description": "Replacement string."},
             },
             "required": ["path", "old_string", "new_string"],

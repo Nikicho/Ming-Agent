@@ -95,7 +95,9 @@ class AutomaticityStore:
     """Persistent store for behavior patterns and their automaticity scores."""
 
     def __init__(self, store_path: str | None = None):
-        self.store_path = Path(store_path) if store_path else Path.cwd() / ".ming" / "automaticity.json"
+        self.store_path = (
+            Path(store_path) if store_path else Path.cwd() / ".ming" / "automaticity.json"
+        )
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
         self.patterns: list[BehaviorPattern] = []
         self._load()
@@ -126,7 +128,11 @@ class AutomaticityStore:
             BehaviorPattern("code_edit", ["修改", "改代码", "fix", "bug", "edit", "refactor"], 0.5),
             BehaviorPattern("code_write", ["写代码", "创建", "create", "implement", "新建"], 0.5),
             BehaviorPattern("code_review", ["review", "审查", "检查", "code review"], 0.3),
-            BehaviorPattern("architecture", ["架构", "设计", "architecture", "design", "重构"], 0.2),
+            BehaviorPattern(
+                "architecture",
+                ["架构", "设计", "architecture", "design", "重构"],
+                0.2,
+            ),
             BehaviorPattern("testing", ["测试", "test", "pytest", "unittest"], 0.5),
             BehaviorPattern("git_ops", ["git", "commit", "push", "merge", "branch"], 0.6),
             BehaviorPattern("file_ops", ["读文件", "read", "查看", "cat", "ls", "目录"], 0.8),

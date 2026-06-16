@@ -10,10 +10,10 @@ Implements P3 System 2 collaboration:
 
 import asyncio
 import logging
-from typing import Any
+import time
 
 from ming.config import LLMConfig
-from ming.core.llm import LLMResponse, Message, call_llm
+from ming.core.llm import Message, call_llm
 
 logger = logging.getLogger("ming")
 
@@ -64,7 +64,8 @@ GAMMA_COMPARE_PROMPT = """\
 1. 判定一致性：CONSISTENT（一致/细节差异）、COEXIST（方向不同可共存）、OPPOSED（根本对立）
 
 2. 按一致性等级，撰写**给用户的最终回答**：
-   - CONSISTENT：直接输出合并后的结论，语气自然，就像一个人回答问题一样。不要提及"两个视角""多角度分析"等内部细节。
+   - CONSISTENT：直接输出合并后的结论，语气自然。
+     不要提及"两个视角""多角度分析"等内部细节。
    - COEXIST：说"这个问题有几种不同思路"，列出选项供用户选择。不要说"经过多角度分析"。
    - OPPOSED：说"这个问题有一个关键分歧需要你来判断"，列出分歧的两面。
 
@@ -101,6 +102,31 @@ GAMMA_RESOLVE_PROMPT = """\
 ## 给用户的回答"""
 
 
+class AgentCallResult:
+    """Result of a single α or β agent call, with metrics."""
+
+    def __init__(self, content: str, usage: dict, latency_ms: int):
+        self.content = content
+        self.usage = usage
+        self.latency_ms = latency_ms
+
+
+class AdversarialMetrics:
+    """Per-agent metrics for trace recording."""
+
+    def __init__(self):
+        self.alpha_usage: dict = {}
+        self.alpha_latency_ms: int = 0
+        self.beta_usage: dict = {}
+        self.beta_latency_ms: int = 0
+        self.gamma_phase1_usage: dict = {}
+        self.gamma_phase1_latency_ms: int = 0
+        self.gamma_phase2_usage: dict = {}
+        self.gamma_phase2_latency_ms: int = 0
+        self.gamma_phase2_ran: bool = False
+        self.total_latency_ms: int = 0
+
+
 class AdversarialResult:
     """Result of adversarial collaboration."""
 
@@ -112,6 +138,7 @@ class AdversarialResult:
         beta_output: str = "",
         gamma_output: str = "",
         tier_signal: str = "",
+        metrics: AdversarialMetrics | None = None,
     ):
         self.final_output = final_output
         self.consistency = consistency
@@ -119,19 +146,22 @@ class AdversarialResult:
         self.beta_output = beta_output
         self.gamma_output = gamma_output
         self.tier_signal = tier_signal
+        self.metrics = metrics or AdversarialMetrics()
 
 
 async def _run_agent(
     messages: list[Message],
     injection: str,
     config: LLMConfig,
-) -> str:
-    """Run a single agent (α or β) with injected prompt."""
-    forked = list(messages)  # shallow copy — shared prefix
+) -> AgentCallResult:
+    """Run a single agent (α or β) with injected prompt and capture metrics."""
+    forked = list(messages)
     forked.append(Message(role="user", content=injection))
 
+    t0 = time.monotonic()
     response = await call_llm(messages=forked, config=config)
-    return response.content
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    return AgentCallResult(response.content, response.usage, latency_ms)
 
 
 async def run_adversarial(
@@ -148,18 +178,33 @@ async def run_adversarial(
         AdversarialResult with merged output and metadata.
     """
     logger.info("Adversarial: starting α/β Fork")
+    metrics = AdversarialMetrics()
+    pipeline_t0 = time.monotonic()
 
     # Step 1: Fork — α and β run in parallel with same prefix, different injections
     alpha_task = _run_agent(dialog_history, ALPHA_INJECTION, config)
     beta_task = _run_agent(dialog_history, BETA_INJECTION, config)
 
-    alpha_output, beta_output = await asyncio.gather(alpha_task, beta_task)
+    alpha_result, beta_result = await asyncio.gather(alpha_task, beta_task)
+    alpha_output = alpha_result.content
+    beta_output = beta_result.content
+
+    metrics.alpha_usage = alpha_result.usage
+    metrics.alpha_latency_ms = alpha_result.latency_ms
+    metrics.beta_usage = beta_result.usage
+    metrics.beta_latency_ms = beta_result.latency_ms
 
     logger.info(f"Adversarial: α={len(alpha_output)} chars, β={len(beta_output)} chars")
 
     # Step 2: γ Phase 1 — compare (fresh context, only sees outputs)
     gamma_compare_messages = [
-        Message(role="system", content="你是内部质量控制模块。你的输出中'给用户的回答'部分会直接展示给用户，必须自然流畅，不能暴露内部多视角分析的存在。"),
+        Message(
+            role="system",
+            content=(
+                "你是内部质量控制模块。你的输出中'给用户的回答'部分会直接展示给用户，"
+                "必须自然流畅，不能暴露内部多视角分析的存在。"
+            ),
+        ),
         Message(
             role="user",
             content=GAMMA_COMPARE_PROMPT.format(
@@ -169,7 +214,10 @@ async def run_adversarial(
         ),
     ]
 
+    g1_t0 = time.monotonic()
     gamma_response = await call_llm(messages=gamma_compare_messages, config=config)
+    metrics.gamma_phase1_latency_ms = int((time.monotonic() - g1_t0) * 1000)
+    metrics.gamma_phase1_usage = gamma_response.usage
     gamma_output = gamma_response.content
 
     # Determine consistency level
@@ -184,18 +232,16 @@ async def run_adversarial(
 
     # Step 3: Handle based on consistency
     if consistency == "CONSISTENT":
-        # α/β agree — merge and present as normal response (don't expose architecture)
         tier_signal = "T4_agree"
         final_output = _extract_user_output(gamma_output)
 
     elif consistency == "COEXIST":
-        # Different but compatible — present options (no architecture exposure)
         tier_signal = "T4_insight"
         final_output = _extract_user_output(gamma_output)
 
     else:  # OPPOSED
-        # Step 3b: γ Phase 2 — divergence resolution
         logger.info("Adversarial: γ Phase 2 — divergence resolution")
+        metrics.gamma_phase2_ran = True
 
         gamma_resolve_messages = list(dialog_history) + [
             Message(
@@ -207,10 +253,15 @@ async def run_adversarial(
             ),
         ]
 
+        g2_t0 = time.monotonic()
         resolve_response = await call_llm(messages=gamma_resolve_messages, config=config)
+        metrics.gamma_phase2_latency_ms = int((time.monotonic() - g2_t0) * 1000)
+        metrics.gamma_phase2_usage = resolve_response.usage
 
         tier_signal = "T6_clarified"
         final_output = _extract_user_output(resolve_response.content)
+
+    metrics.total_latency_ms = int((time.monotonic() - pipeline_t0) * 1000)
 
     return AdversarialResult(
         final_output=final_output,
@@ -219,6 +270,7 @@ async def run_adversarial(
         beta_output=beta_output,
         gamma_output=gamma_output,
         tier_signal=tier_signal,
+        metrics=metrics,
     )
 
 
