@@ -177,12 +177,12 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 
 每次工具调用会生成 `ToolEvent`，记录工具名、状态、输出长度、证据数量和进展类型。`ProgressAssessment` 会判断这一步是否推进任务：
 
-- `new_evidence`：拿到了有效证据。
-- `no_signal`：空输出、短输出或失败。
+- `new_evidence`：拿到了有效证据，或写入/编辑/bash/file_read 成功产生了可用结果。
+- `no_signal`：工具调用确实没有产生可用信息，例如空输出。
 - `artifact_noise`：产生大量内容但没有结构化证据。
 - `unknown`：有输出但还无法判断。
 
-连续多次 `no_signal/artifact_noise` 会暂停本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略空转。用户界面会显示“为什么暂停、刚才主要尝试了哪些工具、下一步如何继续”；原始 `no_signal` 诊断保留在 trace/notepad 详情中。
+连续多次 `no_signal/artifact_noise` 不再直接暂停本轮工具循环，而是先向 agent-loop 注入软提示：5 次进入 `nudge`，8 次进入 `nudge_strong`，建议模型换工具、缩小目标或向用户确认方向。真正的硬停止由 L5 上限负责，包括 `max_iterations`、`max_seconds` 和 `max_cost_per_turn`。工具参数格式错误或不可靠写入策略仍会触发一次 `replan`，要求模型改用更稳定的工具调用方式。
 
 这些事件会保存到 `.ming/session_traces/<session_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
 Trace 还会记录 observations 和 assessments；交互模式用 `/trace` 可以查看最近 SessionTrace 文件路径。
@@ -208,6 +208,11 @@ Context 由 `ContextAssembler` 显式组装，顺序是 base → session → ins
 - `.ming/checkpoints/<turn_id>/checkpoint.json`：保存当前消息、TODO、trace 路径和 notepad 路径。
 - pinned evidence：压缩时强制保留关键证据，并校验摘要是否保留。
 - scope context：`/scope user,project,global` 控制 user/project/global 记忆是否注入 session layer。
+- message normalization：发送给 provider 前会清理孤立 `tool` result，并剥离没有对应 result 的 `tool_calls`，减少长会话或压缩后出现 API 400 的概率。
+- token estimate：优先使用本地 `tiktoken` 估算 token，缺依赖时回退到字符估算。
+- session memory：长会话或多次工具调用后，可把关键信息提取到 `.ming/session_memory/__SESSION_MEMORY.md` 并重新注入 session layer。
+- context collapse：接近安全上限时先做零成本结构化裁剪；如果 collapse 后仍超标，才 fallback 到 LLM compaction。
+- memory hot reload：每轮开始会检查 `.ming/memory/*.md` 是否被外部修改，并热加载到当前 session context。
 
 `/resume` 可以从最近 checkpoint 恢复上下文，继续在当前 CLI 进程里使用。
 checkpoint 同时保存 messages summary、changed files、name，并支持 `/resume <checkpoint_id>` 和 `/cleanup`。
@@ -293,12 +298,20 @@ Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trus
 - Experience Pool 历史分歧检索。
 - Web search / fetch 结构化输出。
 - Web research evidence pack、domain allow/deny、freshness filter。
-- ProgressAssessment 停止无增益工具循环。
+- ProgressAssessment 对无增益工具循环注入 `nudge` / `nudge_strong` 软提示。
+- L5 成本预算 `max_cost_per_turn`。
+- Context 压缩连续失败 circuit breaker。
 - PermissionGate 阻断高风险 shell 命令。
 - 动态工具选择。
 - 本地页面生成类任务的工具集收敛。
 - 每轮 trace/checkpoint/notepad/TODO 落盘。
 - ContextAssembler 显式组装 context。
+- tool_use/tool_result 消息配对规范化。
+- `tiktoken` token 估算与 fallback。
+- SessionMemory 提取和持久化。
+- Context collapse 紧急裁剪。
+- Anthropic system prompt `cache_control` 标记。
+- MemoryStore LLM 结构化提取和 mtime 热加载。
 - instant layer / TODO / Notepad / toolset 注入。
 - pinned evidence 和压缩后校验。
 - `/scope user,project,global` 作用域切换。

@@ -32,7 +32,7 @@ class ContextConfig(BaseModel):
 class AgentConfig(BaseModel):
     max_iterations: int = 50
     max_seconds: int = 300
-    max_cost_per_turn: float = 0
+    max_cost_per_turn: float = 0.50
 
 
 class LoggingConfig(BaseModel):

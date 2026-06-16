@@ -4,9 +4,11 @@ Stores memories as YAML-frontmatter markdown files (same format as Claude Code a
 Provides retrieval for context assembly.
 """
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -53,6 +55,7 @@ class MemoryStore:
         self.memory_dir = Path(memory_dir) if memory_dir else Path.cwd() / ".ming" / "memory"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[MemoryEntry] = []
+        self._last_scan_mtime: float = 0.0
         self._load_all()
 
     def _load_all(self) -> None:
@@ -65,6 +68,13 @@ class MemoryStore:
                     self._entries.append(entry)
             except Exception as e:
                 logger.warning(f"Failed to load memory {f}: {e}")
+        self._last_scan_mtime = self._current_mtime()
+
+    def _current_mtime(self) -> float:
+        return max(
+            (f.stat().st_mtime for f in self.memory_dir.glob("*.md")),
+            default=0.0,
+        )
 
     def _parse_file(self, path: Path) -> MemoryEntry | None:
         """Parse a memory markdown file with YAML frontmatter."""
@@ -112,8 +122,26 @@ class MemoryStore:
         logger.info(f"Memory saved: {name} ({mem_type})")
         return path
 
-    def extract_session_summary(self, messages: list[Message]) -> list[Path]:
-        """Extract simple user/project memories from a session transcript."""
+    def reload_if_changed(self) -> bool:
+        """Reload memories if any memory file changed since the last scan."""
+        current_mtime = self._current_mtime()
+        if current_mtime > self._last_scan_mtime:
+            self._load_all()
+            return True
+        return False
+
+    async def extract_session_summary(
+        self,
+        messages: list[Message],
+        llm_call: Any | None = None,
+    ) -> list[Path]:
+        """Extract memories from a session transcript."""
+        if llm_call is not None:
+            return await self._extract_session_summary_with_llm(messages, llm_call)
+        return self.extract_session_summary_legacy(messages)
+
+    def extract_session_summary_legacy(self, messages: list[Message]) -> list[Path]:
+        """Extract simple user/project memories without an LLM."""
         saved: list[Path] = []
         combined = "\n".join(message.content for message in messages if message.content)
         if "记住" in combined or "偏好" in combined:
@@ -134,6 +162,64 @@ class MemoryStore:
                     content=combined[:1000],
                 )
             )
+        return saved
+
+    async def _extract_session_summary_with_llm(
+        self,
+        messages: list[Message],
+        llm_call: Any,
+    ) -> list[Path]:
+        transcript = "\n".join(
+            f"[{message.role}]: {message.content[:200]}"
+            for message in messages
+            if message.role in {"user", "assistant"} and message.content
+        )
+        if len(transcript) < 200:
+            return []
+
+        extract_messages = [
+            Message(
+                role="system",
+                content=(
+                    "从下面的对话中提取值得长期记住的信息。只提取以下类型：\n"
+                    "- user: 用户的角色、知识背景、偏好\n"
+                    "- feedback: 用户对 AI 行为的纠正或认可\n"
+                    "- project: 项目相关的关键决策或事实\n"
+                    "- reference: 外部资源的位置\n\n"
+                    "如果没有值得记住的内容，输出空 JSON 数组 []。\n"
+                    "输出格式：JSON 数组，每项 {type, name, description, content}。\n"
+                    "name 用 kebab-case，description 一句话，content 简明扼要。\n"
+                    "上限 5 条。"
+                ),
+            ),
+            Message(role="user", content=transcript[-3000:]),
+        ]
+
+        try:
+            response = await llm_call(messages=extract_messages)
+            memories = json.loads(response.content)
+        except Exception:
+            return []
+
+        if not isinstance(memories, list):
+            return []
+
+        saved: list[Path] = []
+        for memory in memories[:5]:
+            if not isinstance(memory, dict):
+                continue
+            name = str(memory.get("name") or "").strip()
+            if not name:
+                continue
+            if any(entry.name == name for entry in self._entries):
+                continue
+            path = self.save(
+                name=name,
+                description=str(memory.get("description") or ""),
+                mem_type=str(memory.get("type") or "project"),
+                content=str(memory.get("content") or ""),
+            )
+            saved.append(path)
         return saved
 
     def mark_stale(self, path: str | Path, reason: str) -> None:

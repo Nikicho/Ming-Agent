@@ -6,6 +6,7 @@ import pytest
 from ming.config import AgentConfig, ContextConfig, LLMConfig, MingConfig
 from ming.core.agent import Agent, AgentProgressEvent
 from ming.core.llm import LLMResponse, Message
+from ming.tools.base import ToolResult
 
 
 def test_explicit_remember_saves_memory(tmp_path, monkeypatch):
@@ -65,6 +66,29 @@ def test_agent_instant_context_declares_local_workspace(tmp_path, monkeypatch):
     assert str(tmp_path) in context
     assert "当前工作文件夹" in context
     assert "不要把本机工作台描述为沙盒" in context
+    assert "绝对路径" in context
+    assert "先使用工具验证" in context
+
+
+def test_agent_filters_legacy_sandbox_denials_from_dialog(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(llm=LLMConfig(model="test-model", api_key="test"))
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    agent.context.add_message(Message(role="user", content="操作 D:\\MingWorkspace 的 html"))
+    agent.context.add_message(
+        Message(
+            role="assistant",
+            content="我的运行环境是一个严格隔离的沙盒，无法访问您本地的文件系统。",
+        )
+    )
+    agent.context.add_message(Message(role="assistant", content="普通历史回答"))
+
+    removed = agent._sanitize_workspace_context()
+
+    assert removed == 1
+    dialog_text = "\n".join(message.content for message in agent.context.dialog_history)
+    assert "严格隔离的沙盒" not in dialog_text
+    assert "普通历史回答" in dialog_text
 
 
 @pytest.mark.asyncio
@@ -190,17 +214,23 @@ async def test_agent_rejects_plan_only_answer_for_execution_task(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeypatch):
+async def test_agent_nudges_after_repeated_no_signal_tool_calls(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config = MingConfig(
         llm=LLMConfig(model="test-model", api_key="test"),
         agent=AgentConfig(max_iterations=10),
     )
     calls = 0
+    tool_calls = 0
 
     async def fake_llm(messages, config, tools=None):
         nonlocal calls
         calls += 1
+        if calls == 6:
+            assert "[Ming 观察]" in messages[-1].content
+            return LLMResponse(content="FINAL: 已调整策略，停止空转。", finish_reason="stop")
+        if calls == 7:
+            return LLMResponse(content="PASS: 工具结果支持最终回复。", finish_reason="stop")
         return LLMResponse(
             content="",
             finish_reason="tool_calls",
@@ -219,12 +249,46 @@ async def test_agent_stops_after_repeated_no_signal_tool_calls(tmp_path, monkeyp
     monkeypatch.setattr("ming.core.agent.call_llm", fake_llm)
 
     agent = Agent(config=config, working_dir=str(tmp_path))
-    result = await agent.chat("搜一下不存在的资料")
+    original_execute = agent._execute_permitted_tool
 
-    assert "我暂停了本轮执行" in result
-    assert "连续 3 次工具调用没有拿到可用的新信息" in result
+    async def fake_execute(tool_name, tool_args):
+        nonlocal tool_calls
+        tool_calls += 1
+        return ToolResult(output="", is_error=False)
+
+    agent._execute_permitted_tool = fake_execute
+    result = await agent.chat("搜一下不存在的资料")
+    agent._execute_permitted_tool = original_execute
+
+    assert result == "已调整策略，停止空转。"
     assert "no_signal" not in result
-    assert calls == 3
+    assert calls == 7
+    assert tool_calls == 5
+    checkpoint = agent.checkpoints.load(agent.last_checkpoint_path)
+    assert checkpoint["todo"]["items"][0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_agent_stops_when_turn_cost_budget_is_exceeded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(
+        llm=LLMConfig(model="test-model", api_key="test"),
+        agent=AgentConfig(max_iterations=10, max_cost_per_turn=0.000001),
+    )
+
+    async def fake_llm(messages, config, tools=None):
+        return LLMResponse(
+            content="FINAL: expensive answer",
+            finish_reason="stop",
+            usage={"prompt_tokens": 100000, "completion_tokens": 100000, "total_tokens": 200000},
+        )
+
+    monkeypatch.setattr("ming.core.agent.call_llm", fake_llm)
+
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    result = await agent.chat("回答一个很贵的问题")
+
+    assert "超过预算" in result
     checkpoint = agent.checkpoints.load(agent.last_checkpoint_path)
     assert checkpoint["todo"]["items"][0]["status"] != "completed"
 

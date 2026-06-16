@@ -16,12 +16,26 @@ from ming.core.llm import Message
 
 logger = logging.getLogger("ming")
 
-# Rough chars-to-tokens ratio for Chinese+English mixed content
 CHARS_PER_TOKEN = 2.5
+
+try:
+    import tiktoken
+
+    _ENCODER = tiktoken.encoding_for_model("gpt-4o")
+except Exception:
+    _ENCODER = None
 
 
 def estimate_tokens(messages: list[Message]) -> int:
-    """Rough token estimate from message content length."""
+    """Estimate token usage with tiktoken when available, else char fallback."""
+    if _ENCODER is not None:
+        total = 0
+        for message in messages:
+            total += len(_ENCODER.encode(message.content or "")) + 4
+            if message.tool_calls:
+                total += len(_ENCODER.encode(str(message.tool_calls)))
+        return total
+
     total_chars = sum(len(m.content) for m in messages)
     return int(total_chars / CHARS_PER_TOKEN)
 
@@ -149,6 +163,41 @@ class ContextManager:
         """Check if we're approaching hard limit."""
         tokens = self.current_tokens()
         return tokens > self.max_context_tokens * self.safety_threshold
+
+    def context_collapse(self) -> bool:
+        """Emergency context reduction without an LLM call."""
+        if len(self.dialog_history) < 10:
+            return False
+
+        protect_recent = 10
+        collapsed = False
+        for index, message in enumerate(self.dialog_history):
+            if index >= len(self.dialog_history) - protect_recent:
+                continue
+            if message.role == "tool":
+                self.dialog_history[index] = Message(
+                    role="tool",
+                    content="[collapsed]",
+                    tool_call_id=message.tool_call_id,
+                )
+                collapsed = True
+            elif message.role == "assistant" and len(message.content) > 100:
+                self.dialog_history[index] = Message(
+                    role="assistant",
+                    content=message.content[:100].rstrip() + "...[collapsed]",
+                    tool_calls=message.tool_calls,
+                )
+                collapsed = True
+            elif message.role == "user" and len(message.content) > 200:
+                self.dialog_history[index] = Message(
+                    role="user",
+                    content=message.content[:200].rstrip() + "...[collapsed]",
+                )
+                collapsed = True
+
+        if collapsed:
+            logger.warning("Context collapse truncated old dialog messages in-place")
+        return collapsed
 
     async def compact(self, llm_call: Any) -> None:
         """Compact dialog history using LLM summarization.

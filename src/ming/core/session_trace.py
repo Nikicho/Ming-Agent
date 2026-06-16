@@ -47,7 +47,7 @@ class ToolCallTrace:
     id: str
     name: str
     arguments: str
-    loop_status: str  # "ok", "warn", "block"
+    loop_status: str  # "not_checked" after L1 fingerprint checks were removed
     consecutive_identical: int
     result_output_length: int = 0
     result_is_error: bool = False
