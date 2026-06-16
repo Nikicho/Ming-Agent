@@ -329,8 +329,9 @@ DEMO_INDEX_HTML = """<!doctype html>
     .conversation {
       overflow: auto;
       padding: 22px 22px 16px;
-      display: grid;
-      align-content: start;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
       gap: 16px;
       min-height: 0;
     }
@@ -338,9 +339,10 @@ DEMO_INDEX_HTML = """<!doctype html>
     .message {
       display: grid; gap: 8px;
       max-width: 82%;
+      flex: 0 0 auto;
     }
-    .message.user { justify-self: end; }
-    .message.ming { justify-self: start; }
+    .message.user { align-self: flex-end; }
+    .message.ming { align-self: flex-start; }
 
     .message-label {
       color: var(--muted); font-size: 11px;
@@ -439,6 +441,7 @@ DEMO_INDEX_HTML = """<!doctype html>
     /* ===== Tool Call Card ===== */
     .tool-card {
       max-width: 82%;
+      flex: 0 0 auto;
       border: 1px solid var(--line);
       border-radius: var(--radius-md);
       background: rgba(255, 254, 250, .76);
@@ -473,8 +476,9 @@ DEMO_INDEX_HTML = """<!doctype html>
     /* ===== Agent Process Cards ===== */
     .thinking-card,
     .process-card {
-      justify-self: start;
+      align-self: flex-start;
       max-width: 82%;
+      flex: 0 0 auto;
       border: 1px solid var(--line);
       border-radius: var(--radius-md);
       background: rgba(255, 254, 250, .72);
@@ -504,6 +508,8 @@ DEMO_INDEX_HTML = """<!doctype html>
       color: var(--ink-2);
       font-size: 12px;
       line-height: 1.45;
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .thinking-dots {
       display: inline-flex;

@@ -32,6 +32,8 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "panel main-workspace" in html
     assert "panel process-rail" in html
     assert "composer-box" in html
+    assert "flex-direction: column" in html
+    assert "flex: 0 0 auto" in html
     assert "tool-card" in html
     assert "thinking-card" in html
     assert "process-card" in html
