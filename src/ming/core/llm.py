@@ -1,11 +1,8 @@
-"""LLM integration layer via LiteLLM.
-
-Provides a unified interface for calling any LLM provider.
-"""
+"""LLM integration layer for OpenAI-compatible chat completion APIs."""
 
 from typing import Any
 
-import litellm
+import httpx
 from pydantic import BaseModel, Field
 
 from ming.config import LLMConfig
@@ -37,7 +34,7 @@ async def call_llm(
     config: LLMConfig,
     tools: list[dict[str, Any]] | None = None,
 ) -> LLMResponse:
-    """Call the LLM via LiteLLM.
+    """Call an OpenAI-compatible chat completions endpoint.
 
     Args:
         messages: Conversation history.
@@ -51,23 +48,23 @@ async def call_llm(
     last_error: Exception | None = None
 
     for model in models:
-        kwargs: dict[str, Any] = {
-            "model": model,
+        api_base = _resolve_api_base(config.api_base, model)
+        payload: dict[str, Any] = {
+            "model": _provider_model_name(model),
             "messages": _serialize_messages(messages, model),
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
-            "timeout": config.request_timeout_seconds,
         }
-
-        if config.api_key:
-            kwargs["api_key"] = config.api_key
-        if config.api_base:
-            kwargs["api_base"] = config.api_base
         if tools:
-            kwargs["tools"] = tools
+            payload["tools"] = tools
 
         try:
-            response = await litellm.acompletion(**kwargs)
+            response = await _post_chat_completion(
+                api_base=api_base,
+                api_key=config.api_key,
+                payload=payload,
+                timeout_seconds=config.request_timeout_seconds,
+            )
             break
         except Exception as exc:
             last_error = exc
@@ -75,48 +72,105 @@ async def call_llm(
         assert last_error is not None
         raise last_error
 
-    # Parse response
-    choice = response.choices[0]
-    message = choice.message
+    choices = response.get("choices") or []
+    if not choices:
+        raise LLMProviderError("Provider response did not include choices.")
+    choice = choices[0]
+    message = choice.get("message") or {}
 
     # Extract tool calls if present
     tool_calls_data = None
-    if message.tool_calls:
+    if message.get("tool_calls"):
         tool_calls_data = [
             {
-                "id": tc.id,
-                "type": tc.type,
+                "id": tc.get("id", ""),
+                "type": tc.get("type", "function"),
                 "function": {
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
+                    "name": (tc.get("function") or {}).get("name", ""),
+                    "arguments": (tc.get("function") or {}).get("arguments", ""),
                 },
             }
-            for tc in message.tool_calls
+            for tc in message["tool_calls"]
         ]
 
+    usage = response.get("usage") or {}
     return LLMResponse(
-        content=message.content or "",
-        finish_reason=choice.finish_reason or "stop",
+        content=message.get("content") or "",
+        finish_reason=choice.get("finish_reason") or "stop",
         usage={
-            "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-            "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-            "total_tokens": response.usage.total_tokens if response.usage else 0,
+            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "completion_tokens": int(usage.get("completion_tokens") or 0),
+            "total_tokens": int(usage.get("total_tokens") or 0),
         },
         tool_calls=tool_calls_data,
     )
 
 
+class LLMProviderError(RuntimeError):
+    """Raised when a provider returns an invalid or unsuccessful response."""
+
+
+async def _post_chat_completion(
+    *,
+    api_base: str,
+    api_key: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    if not api_key:
+        raise LLMProviderError("LLM API key is not configured.")
+
+    url = api_base.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    timeout = httpx.Timeout(timeout_seconds, connect=min(20, timeout_seconds))
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response.json()
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(
+            f"LLM provider timed out after {timeout_seconds} seconds while requesting {url}."
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:800]
+        raise LLMProviderError(
+            f"LLM provider returned HTTP {exc.response.status_code}: {body}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise LLMProviderError(f"LLM provider request failed: {exc}") from exc
+
+
+def _resolve_api_base(api_base: str, model: str) -> str:
+    if api_base:
+        return api_base
+    provider = model.split("/", 1)[0].lower() if "/" in model else ""
+    defaults = {
+        "deepseek": "https://api.deepseek.com/v1",
+        "glm": "https://open.bigmodel.cn/api/paas/v4",
+        "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+        "minimax": "https://api.minimax.chat/v1",
+    }
+    if provider in defaults:
+        return defaults[provider]
+    raise LLMProviderError(
+        "LLM API base URL is not configured. Set llm.api_base for this model."
+    )
+
+
+def _provider_model_name(model: str) -> str:
+    provider, sep, name = model.partition("/")
+    if sep and provider.lower() in {"deepseek", "glm", "zhipu", "minimax"}:
+        return name
+    return model
+
+
 def _serialize_messages(messages: list[Message], model: str) -> list[dict[str, Any]]:
     serialized = []
-    use_cache_control = _is_anthropic_model(model)
     for message in messages:
         payload = message.model_dump(exclude_none=True)
-        if use_cache_control and message.role == "system":
-            payload["cache_control"] = {"type": "ephemeral"}
         serialized.append(payload)
     return serialized
-
-
-def _is_anthropic_model(model: str) -> bool:
-    lowered = model.lower()
-    return any(keyword in lowered for keyword in ("claude", "anthropic", "haiku", "sonnet", "opus"))

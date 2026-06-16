@@ -61,7 +61,7 @@ def _setup_logging(level: str = "INFO") -> None:
     logging.getLogger("ming").setLevel(numeric_level)
 
     # Suppress noisy third-party loggers
-    for name in ("httpx", "litellm", "LiteLLM", "httpcore", "openai", "aiohttp", "asyncio"):
+    for name in ("httpx", "httpcore", "openai", "aiohttp", "asyncio"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
     logging.getLogger("ming").info(f"Session log: {log_file}")
@@ -72,7 +72,7 @@ def _set_ming_log_level(level: str) -> None:
     logging.getLogger("ming").setLevel(numeric_level)
     for handler in logging.getLogger().handlers:
         handler.setLevel(numeric_level)
-    for name in ("litellm", "LiteLLM", "httpx", "httpcore", "openai", "aiohttp"):
+    for name in ("httpx", "httpcore", "openai", "aiohttp"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 

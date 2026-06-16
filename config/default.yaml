@@ -4,7 +4,7 @@
 
 # LLM Provider
 llm:
-  # LiteLLM model string: "deepseek/deepseek-chat", "openai/gpt-4o", "anthropic/claude-sonnet-4-20250514", etc.
+  # Model name. Prefixes deepseek/, glm/, zhipu/, minimax/ infer a default OpenAI-compatible API base.
   model: "deepseek/deepseek-chat"
   # API key — override in local.yaml, NEVER commit real keys
   api_key: ""

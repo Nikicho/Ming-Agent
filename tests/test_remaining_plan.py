@@ -26,7 +26,7 @@ def test_llm_timeout_failure_is_user_facing_with_hidden_technical_detail():
         pass
 
     exc = TimeoutLikeError(
-        "litellm.Timeout: Timeout Error: DeepseekException - "
+        "ProviderTimeout: DeepSeek request timed out - "
         "Connection timed out. Timeout passed=600.0, time taken=600.308 seconds"
     )
 
@@ -35,7 +35,7 @@ def test_llm_timeout_failure_is_user_facing_with_hidden_technical_detail():
     assert "模型服务 10 分钟没有响应" in failure.user_message
     assert "已保留当前进度" in failure.user_message
     assert "DeepseekException" not in failure.user_message
-    assert "litellm.Timeout" in failure.technical_detail
+    assert "ProviderTimeout" in failure.technical_detail
     assert failure.category == "timeout"
     assert failure.retryable is True
 

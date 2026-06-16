@@ -58,6 +58,8 @@ def test_workbench_index_matches_three_zone_interaction_design(tmp_path):
     assert "setTab" in html
     assert "renderMarkdown" in html
     assert "isMarkdownSeparator" in html
+    assert "renderMarkdownTable" in html
+    assert "isMarkdownTableStart" in html
     assert "classifyReplyStatus" in html
     assert "计划说明" in html
     assert "暂无产物" in html
@@ -149,3 +151,51 @@ def test_workbench_state_exposes_sessions_process_panel_and_trace_tabs(tmp_path)
     assert "api_key_configured" in state["trace_tabs"]["settings"]
     assert state["settings"]["model"] == state["trace_tabs"]["settings"]["model"]
     assert any(card["kind"] == "tool" and card["collapsed"] for card in state["timeline"])
+
+
+def test_history_conversation_keeps_process_out_of_main_chat(tmp_path):
+    checkpoint_root = tmp_path / ".ming" / "checkpoints" / "turn-process"
+    checkpoint_root.mkdir(parents=True)
+    (checkpoint_root / "checkpoint.json").write_text(
+        json.dumps(
+            {
+                "turn_id": "turn-process",
+                "name": "build a todo page",
+                "created_at": "2026-06-16T23:54:03",
+                "messages": [
+                    {"role": "user", "content": "build a todo page"},
+                    {
+                        "role": "assistant",
+                        "content": "I will inspect the workspace first.",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "bash", "arguments": "dir"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call-1",
+                        "name": "bash",
+                        "content": "Directory listing",
+                    },
+                    {"role": "assistant", "content": "Done. The todo page is ready."},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = TraceConsoleState(tmp_path).load()
+    conversation = state["sessions"][0]["conversation"]
+    serialized = json.dumps(conversation, ensure_ascii=False)
+
+    assert conversation == [
+        {"role": "user", "content": "build a todo page"},
+        {"role": "ming", "content": "Done. The todo page is ready."},
+    ]
+    assert "tool" not in {item["role"] for item in conversation}
+    assert "I will inspect" not in serialized
+    assert "Directory listing" not in serialized

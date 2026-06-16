@@ -360,8 +360,8 @@ class SessionTrace:
         self.compaction_events.append(event)
 
     # -- Cost estimation --
-    # Problem: LiteLLM cost data is model-dependent and often unavailable for
-    # non-OpenAI models (like DeepSeek). We can't rely on it.
+    # Problem: provider cost data is model-dependent and often unavailable for
+    # non-OpenAI models like DeepSeek, GLM, and MiniMax. We can't rely on it.
     # Solution: Use a rough estimate based on token counts with a configurable
     # price-per-token. Default to DeepSeek V4 Flash pricing.
     # This is marked "estimated" in the output to avoid misleading.

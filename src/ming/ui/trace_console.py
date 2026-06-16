@@ -384,6 +384,29 @@ DEMO_INDEX_HTML = """<!doctype html>
       border-radius: 5px;
       padding: 1px 5px;
     }
+    .bubble-content table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+      line-height: 1.45;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .bubble-content th,
+    .bubble-content td {
+      border: 1px solid var(--line);
+      padding: 7px 8px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .bubble-content th {
+      background: var(--surface-2);
+      font-weight: 760;
+      color: var(--ink);
+    }
     .reply-status {
       display: inline-flex;
       align-items: center;
@@ -1261,7 +1284,7 @@ DEMO_INDEX_HTML = """<!doctype html>
       const apiKey = document.getElementById("settingsApiKey");
       document.getElementById("settingsWorkspace").value = currentState.workspace || "";
       apiBase.value = settings.api_base || "";
-      apiBase.placeholder = "LiteLLM provider 默认地址";
+      apiBase.placeholder = "留空时按 DeepSeek/GLM/MiniMax 推断";
       document.getElementById("settingsModel").value = settings.model || "未配置";
       apiKey.value = "";
       apiKey.placeholder = settings.api_key_configured ? "已在本地配置，输入新 key 可覆盖" : "未配置";
@@ -1406,11 +1429,20 @@ DEMO_INDEX_HTML = """<!doctype html>
         html.push(`</${listType}>`);
         listType = "";
       };
-      for (const rawLine of lines) {
+      for (let index = 0; index < lines.length; index += 1) {
+        const rawLine = lines[index];
         const line = rawLine.trim();
         if (!line) {
           closeParagraph();
           closeList();
+          continue;
+        }
+        if (isMarkdownTableStart(lines, index)) {
+          closeParagraph();
+          closeList();
+          const table = readMarkdownTable(lines, index);
+          html.push(renderMarkdownTable(table.rows));
+          index = table.nextIndex - 1;
           continue;
         }
         if (isMarkdownSeparator(line)) {
@@ -1457,6 +1489,45 @@ DEMO_INDEX_HTML = """<!doctype html>
 
     function isMarkdownSeparator(line) {
       return /^([-*_]\\s*){3,}$/.test(line) || /^[\u2014\u2500\u2501]{3,}$/.test(line);
+    }
+
+    function isMarkdownTableStart(lines, index) {
+      const current = (lines[index] || "").trim();
+      const next = (lines[index + 1] || "").trim();
+      return isMarkdownTableRow(current) && isMarkdownTableSeparator(next);
+    }
+
+    function isMarkdownTableRow(line) {
+      return /^\\|.+\\|$/.test(line) && line.split("|").length >= 4;
+    }
+
+    function isMarkdownTableSeparator(line) {
+      return /^\\|\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?$/.test(line);
+    }
+
+    function readMarkdownTable(lines, startIndex) {
+      const rows = [splitMarkdownTableRow(lines[startIndex])];
+      let index = startIndex + 2;
+      while (index < lines.length && isMarkdownTableRow(lines[index].trim())) {
+        rows.push(splitMarkdownTableRow(lines[index]));
+        index += 1;
+      }
+      return { rows, nextIndex: index };
+    }
+
+    function splitMarkdownTableRow(line) {
+      return line.trim().replace(/^\\|/, "").replace(/\\|$/, "").split("|").map(cell => cell.trim());
+    }
+
+    function renderMarkdownTable(rows) {
+      if (!rows.length) return "";
+      const header = rows[0];
+      const body = rows.slice(1);
+      const headHtml = `<thead><tr>${header.map(cell => `<th>${formatInline(cell)}</th>`).join("")}</tr></thead>`;
+      const bodyHtml = body.length
+        ? `<tbody>${body.map(row => `<tr>${row.map(cell => `<td>${formatInline(cell)}</td>`).join("")}</tr>`).join("")}</tbody>`
+        : "";
+      return `<table>${headHtml}${bodyHtml}</table>`;
     }
 
     function formatInline(value) {
@@ -1974,36 +2045,8 @@ class TraceConsoleState:
             elif role == "assistant":
                 if not seen_public_user:
                     continue
-                tool_calls = message.get("tool_calls") or []
-                for call in tool_calls:
-                    function = call.get("function") or {}
-                    rows.append(
-                        {
-                            "role": "tool",
-                            "content": {
-                                "tool": function.get("name") or "tool",
-                                "message": "历史工具调用",
-                                "detail": self._clip_history_content(function.get("arguments") or ""),
-                                "status": "done",
-                            },
-                        }
-                    )
-                if content:
+                if content and not message.get("tool_calls"):
                     rows.append({"role": "ming", "content": self._clip_history_content(content)})
-            elif role == "tool" and content:
-                if not seen_public_user:
-                    continue
-                rows.append(
-                    {
-                        "role": "tool",
-                        "content": {
-                            "tool": message.get("name") or message.get("tool_call_id") or "tool",
-                            "message": "历史工具结果",
-                            "detail": self._clip_history_content(content),
-                            "status": "done",
-                        },
-                    }
-                )
         return rows[-40:]
 
     def _conversation_from_turn(self, turn: dict[str, Any]) -> list[dict[str, Any]]:
