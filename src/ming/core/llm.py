@@ -53,7 +53,7 @@ async def call_llm(
     for model in models:
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": [m.model_dump(exclude_none=True) for m in messages],
+            "messages": _serialize_messages(messages, model),
             "temperature": config.temperature,
             "max_tokens": config.max_tokens,
             "timeout": config.request_timeout_seconds,
@@ -104,3 +104,19 @@ async def call_llm(
         },
         tool_calls=tool_calls_data,
     )
+
+
+def _serialize_messages(messages: list[Message], model: str) -> list[dict[str, Any]]:
+    serialized = []
+    use_cache_control = _is_anthropic_model(model)
+    for message in messages:
+        payload = message.model_dump(exclude_none=True)
+        if use_cache_control and message.role == "system":
+            payload["cache_control"] = {"type": "ephemeral"}
+        serialized.append(payload)
+    return serialized
+
+
+def _is_anthropic_model(model: str) -> bool:
+    lowered = model.lower()
+    return any(keyword in lowered for keyword in ("claude", "anthropic", "haiku", "sonnet", "opus"))

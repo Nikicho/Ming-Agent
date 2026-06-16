@@ -50,7 +50,48 @@ class ContextAssembler:
             )
 
         messages.extend(data.dialog)
-        return messages
+        return self._normalize_tool_pairs(messages)
+
+    def _normalize_tool_pairs(self, messages: list[Message]) -> list[Message]:
+        """Ensure tool calls and tool results stay paired before provider calls."""
+        tool_use_ids: set[str] = set()
+        for message in messages:
+            for tool_call in message.tool_calls or []:
+                call_id = tool_call.get("id")
+                if call_id:
+                    tool_use_ids.add(str(call_id))
+
+        cleaned: list[Message] = []
+        for message in messages:
+            if (
+                message.role == "tool"
+                and message.tool_call_id
+                and message.tool_call_id not in tool_use_ids
+            ):
+                continue
+            cleaned.append(message)
+
+        result_ids = {
+            message.tool_call_id
+            for message in cleaned
+            if message.role == "tool" and message.tool_call_id
+        }
+        final: list[Message] = []
+        for message in cleaned:
+            if message.tool_calls:
+                paired_calls = [
+                    tool_call
+                    for tool_call in message.tool_calls
+                    if str(tool_call.get("id") or "") in result_ids
+                ]
+                if paired_calls:
+                    message = message.model_copy(update={"tool_calls": paired_calls})
+                elif message.content:
+                    message = message.model_copy(update={"tool_calls": None})
+                else:
+                    continue
+            final.append(message)
+        return final
 
     def _read_notepad_summary(self, path: Path | None) -> str:
         if path is None or not path.exists():

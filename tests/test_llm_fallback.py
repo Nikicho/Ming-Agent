@@ -65,3 +65,25 @@ async def test_call_llm_passes_configured_request_timeout(monkeypatch):
     )
 
     assert seen_kwargs["timeout"] == 45
+
+
+@pytest.mark.asyncio
+async def test_call_llm_marks_anthropic_system_messages_cacheable(monkeypatch):
+    seen_kwargs = {}
+
+    async def fake_completion(**kwargs):
+        seen_kwargs.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr("litellm.acompletion", fake_completion)
+
+    await call_llm(
+        messages=[
+            Message(role="system", content="stable base"),
+            Message(role="user", content="hi"),
+        ],
+        config=LLMConfig(model="anthropic/claude-sonnet-4", api_key="test"),
+    )
+
+    assert seen_kwargs["messages"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in seen_kwargs["messages"][1]

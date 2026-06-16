@@ -238,9 +238,10 @@ def test_checkpoint_supports_named_resume_and_cleanup(tmp_path):
     assert not first.exists()
 
 
-def test_memory_store_extracts_session_and_project_memory_and_marks_stale(tmp_path):
+@pytest.mark.asyncio
+async def test_memory_store_extracts_session_and_project_memory_and_marks_stale(tmp_path):
     store = MemoryStore(tmp_path)
-    store.extract_session_summary(
+    await store.extract_session_summary(
         [
             Message(role="user", content="记住我喜欢 pytest"),
             Message(role="assistant", content="项目结构：src/ming/core 是核心"),
@@ -254,6 +255,39 @@ def test_memory_store_extracts_session_and_project_memory_and_marks_stale(tmp_pa
     store.mark_stale(stale, reason="file changed")
 
     assert "stale" in stale.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_memory_store_uses_llm_structured_extraction_and_reload(tmp_path):
+    store = MemoryStore(tmp_path)
+
+    async def fake_llm(messages):
+        assert "JSON 数组" in messages[0].content
+        return LLMResponse(
+            content=(
+                '[{"type":"project","name":"core-path","description":"core path",'
+                '"content":"src/ming/core is the orchestration layer"}]'
+            ),
+            finish_reason="stop",
+        )
+
+    saved = await store.extract_session_summary(
+        [
+            Message(role="user", content="我们项目里 src/ming/core 是 orchestration 入口。" * 5),
+            Message(role="assistant", content="我会把这个当成项目事实。" * 5),
+        ],
+        llm_call=fake_llm,
+    )
+
+    assert len(saved) == 1
+    assert store.get_all()[0].name == "core-path"
+
+    (tmp_path / "external.md").write_text(
+        "---\nname: external\ndescription: outside edit\ntype: project\n---\n\nmanual edit\n",
+        encoding="utf-8",
+    )
+    assert store.reload_if_changed() is True
+    assert any(entry.name == "external" for entry in store.get_all())
 
 
 def test_skill_index_and_tool_need_proposal_are_metadata_only(tmp_path):

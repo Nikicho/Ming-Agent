@@ -20,6 +20,7 @@ from typing import Callable
 
 from ming.config import MingConfig, load_config
 from ming.context.manager import ContextManager
+from ming.context.session_memory import SessionMemory
 from ming.core.adversarial import AdversarialResult, run_adversarial
 from ming.core.automaticity import AutomaticityStore
 from ming.core.cognitive_router import CognitiveRouter
@@ -150,6 +151,10 @@ class Agent:
         self.notepad = NotepadStore(self.workspace_root / ".ming" / "scratch")
         self.checkpoints = CheckpointStore(self.workspace_root / ".ming" / "checkpoints")
         self.snapshots = FileSnapshotStore(self.workspace_root / ".ming" / "snapshots")
+        self.session_memory = SessionMemory(
+            self.workspace_root / ".ming" / "session_memory",
+            self.config.llm,
+        )
         self.session_trace = SessionTrace(
             model=self.config.llm.model,
             agent_version=self._get_version(),
@@ -180,6 +185,7 @@ class Agent:
         self._changed_files = set()
         self.session_trace.begin_turn(self.current_turn_id, user_input)
         self._emit_progress("context", "准备上下文")
+        self._refresh_memory_context_if_changed()
         removed_legacy_context = self._sanitize_workspace_context()
         if removed_legacy_context:
             self._emit_progress(
@@ -332,8 +338,10 @@ class Agent:
 
             # Safety compaction check mid-loop
             if self.context.needs_safety_compaction():
-                logger.warning("Safety compaction triggered mid-loop")
-                await self._run_compaction(trigger="safety")
+                logger.warning("Safety context collapse triggered mid-loop")
+                self.context.context_collapse()
+                if self.context.needs_safety_compaction():
+                    await self._run_compaction(trigger="safety_post_collapse")
 
             # Call LLM
             self._emit_progress("llm", f"调用模型，第 {iteration} 轮")
@@ -426,6 +434,7 @@ class Agent:
                         output=result.output,
                         is_error=result.is_error,
                     )
+                    self.session_memory.record_tool_call()
                     assessment = self.progress_tracker.record(event)
                     self.notepad.add_tool_observation(
                         notepad_path,
@@ -469,6 +478,8 @@ class Agent:
                             f"progress_nudge: {assessment.reason}",
                         )
                         self.context.add_message(Message(role="user", content=hint))
+
+                    await self._maybe_update_session_memory()
 
                     if (
                         assessment.decision == "replan"
@@ -904,6 +915,26 @@ class Agent:
         mem_context = self.memory.get_scoped_context(normalized)
         removed = self.context.replace_session_context(mem_context, label="memories")
         return {"active_scopes": normalized, "session_context_replaced": removed}
+
+    def _refresh_memory_context_if_changed(self) -> bool:
+        if not self.memory.reload_if_changed():
+            return False
+        mem_context = self.memory.get_scoped_context(self.active_context_scopes)
+        self.context.replace_session_context(mem_context, label="memories")
+        return True
+
+    async def _maybe_update_session_memory(self) -> None:
+        current_tokens = self.context.current_tokens()
+        if not self.session_memory.should_extract(current_tokens):
+            return
+
+        memory_text = await self.session_memory.extract(
+            self.context.dialog_history,
+            current_tokens=current_tokens,
+        )
+        if memory_text:
+            self.context.replace_session_context(memory_text, label="session_memory")
+            self._emit_progress("context", "Session Memory 已更新")
 
     def rewind_last_turn(self) -> int:
         """Remove the most recent user turn and all messages after it."""

@@ -5,6 +5,7 @@ import pytest
 from ming.config import AgentConfig, LLMConfig, MingConfig
 from ming.context.assembler import ContextAssembler, ContextAssemblyInput
 from ming.context.manager import ContextManager
+from ming.context.session_memory import SessionMemory
 from ming.core.agent import Agent
 from ming.core.llm import LLMResponse, Message
 from ming.core.notepad import NotepadStore
@@ -40,6 +41,39 @@ def test_context_assembler_orders_base_session_dialog_and_instant_workbench(tmp_
         "hello",
     ]
     assert "file_write" in messages[-2].content
+
+
+def test_context_assembler_normalizes_orphaned_tool_pairs():
+    messages = ContextAssembler().assemble(
+        ContextAssemblyInput(
+            dialog=[
+                Message(role="tool", content="orphan", tool_call_id="missing"),
+                Message(
+                    role="assistant",
+                    content="tool call",
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "file_read", "arguments": "{}"},
+                        },
+                        {
+                            "id": "call-2",
+                            "type": "function",
+                            "function": {"name": "file_write", "arguments": "{}"},
+                        },
+                    ],
+                ),
+                Message(role="tool", content="paired", tool_call_id="call-1"),
+                Message(role="assistant", content="", tool_calls=[{"id": "call-3"}]),
+            ],
+        )
+    )
+
+    assert not any(message.content == "orphan" for message in messages)
+    assistant = next(message for message in messages if message.content == "tool call")
+    assert [tool_call["id"] for tool_call in assistant.tool_calls] == ["call-1"]
+    assert all(message.tool_calls is None or message.content for message in messages)
 
 
 def test_context_manager_has_instant_layer_and_pinned_evidence():
@@ -109,6 +143,43 @@ async def test_compaction_preserves_pinned_evidence_and_verifies_summary(monkeyp
     combined = "\n".join(message.content for message in manager.get_messages())
     assert "CRITICAL_EVIDENCE" in combined
     assert manager.last_compaction_verified is True
+
+
+def test_context_collapse_truncates_old_dialog_without_llm():
+    manager = ContextManager()
+    for i in range(15):
+        role = "tool" if i % 2 == 0 else "assistant"
+        manager.add_message(Message(role=role, content="x" * 500, tool_call_id=f"call-{i}"))
+
+    assert manager.context_collapse() is True
+
+    old_messages = manager.dialog_history[:-10]
+    assert any(message.content == "[collapsed]" for message in old_messages)
+    assert any("[collapsed]" in message.content for message in old_messages)
+
+
+@pytest.mark.asyncio
+async def test_session_memory_extracts_and_persists_context(tmp_path):
+    session_memory = SessionMemory(tmp_path, LLMConfig(model="test-model", api_key="test"))
+
+    async def fake_llm(messages, config):
+        assert "信息提取助手" in messages[0].content
+        return LLMResponse(content="- 用户决定使用 pytest", finish_reason="stop")
+
+    result = await session_memory.extract_with_llm(
+        [
+            Message(role="user", content="请记住我们用 pytest"),
+            Message(role="assistant", content="好的"),
+            Message(role="user", content="src/ming/core 是核心路径"),
+            Message(role="assistant", content="已记录"),
+        ],
+        current_tokens=42_000,
+        llm_call=fake_llm,
+    )
+
+    assert result == "- 用户决定使用 pytest"
+    assert session_memory.get_context_block() == "- 用户决定使用 pytest"
+    assert (tmp_path / "__SESSION_MEMORY.md").read_text(encoding="utf-8") == result
 
 
 def test_memory_store_scope_retrieval_and_project_context(tmp_path):

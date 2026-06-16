@@ -208,6 +208,11 @@ Context 由 `ContextAssembler` 显式组装，顺序是 base → session → ins
 - `.ming/checkpoints/<turn_id>/checkpoint.json`：保存当前消息、TODO、trace 路径和 notepad 路径。
 - pinned evidence：压缩时强制保留关键证据，并校验摘要是否保留。
 - scope context：`/scope user,project,global` 控制 user/project/global 记忆是否注入 session layer。
+- message normalization：发送给 provider 前会清理孤立 `tool` result，并剥离没有对应 result 的 `tool_calls`，减少长会话或压缩后出现 API 400 的概率。
+- token estimate：优先使用本地 `tiktoken` 估算 token，缺依赖时回退到字符估算。
+- session memory：长会话或多次工具调用后，可把关键信息提取到 `.ming/session_memory/__SESSION_MEMORY.md` 并重新注入 session layer。
+- context collapse：接近安全上限时先做零成本结构化裁剪；如果 collapse 后仍超标，才 fallback 到 LLM compaction。
+- memory hot reload：每轮开始会检查 `.ming/memory/*.md` 是否被外部修改，并热加载到当前 session context。
 
 `/resume` 可以从最近 checkpoint 恢复上下文，继续在当前 CLI 进程里使用。
 checkpoint 同时保存 messages summary、changed files、name，并支持 `/resume <checkpoint_id>` 和 `/cleanup`。
@@ -301,6 +306,12 @@ Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trus
 - 本地页面生成类任务的工具集收敛。
 - 每轮 trace/checkpoint/notepad/TODO 落盘。
 - ContextAssembler 显式组装 context。
+- tool_use/tool_result 消息配对规范化。
+- `tiktoken` token 估算与 fallback。
+- SessionMemory 提取和持久化。
+- Context collapse 紧急裁剪。
+- Anthropic system prompt `cache_control` 标记。
+- MemoryStore LLM 结构化提取和 mtime 热加载。
 - instant layer / TODO / Notepad / toolset 注入。
 - pinned evidence 和压缩后校验。
 - `/scope user,project,global` 作用域切换。
