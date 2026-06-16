@@ -24,11 +24,10 @@ from ming.core.adversarial import AdversarialResult, run_adversarial
 from ming.core.automaticity import AutomaticityStore
 from ming.core.cognitive_router import CognitiveRouter
 from ming.core.llm import LLMResponse, Message, call_llm
-from ming.core.loop_detection import LoopDetector
 from ming.core.notepad import NotepadStore
 from ming.core.permission import PermissionGate
 from ming.core.progress import ProgressTracker, ToolEvent
-from ming.core.recovery import FileSnapshotStore, format_llm_failure, format_tool_stall
+from ming.core.recovery import FileSnapshotStore, format_llm_failure
 from ming.core.session_trace import (
     AdversarialAgentTrace,
     CompactionEvent,
@@ -57,6 +56,28 @@ class AgentProgressEvent:
     message: str
     detail: str = ""
     turn_id: str = ""
+
+
+SANDBOX_DENIAL_HINTS = (
+    "严格隔离的沙盒",
+    "浏览器沙盒",
+    "sandbox environment",
+    "isolated sandbox",
+)
+
+LOCAL_ACCESS_DENIAL_HINTS = (
+    "无法访问您本地的文件系统",
+    "无法访问用户本地文件系统",
+    "无法直接读取或写入",
+    "无法直接读写",
+    "无法访问 Windows",
+    "无法访问本地",
+    "cannot access your local file system",
+    "can't access your local file system",
+    "cannot directly read or write",
+)
+
+MAX_CONSECUTIVE_COMPACTION_FAILURES = 3
 
 SYSTEM_PROMPT = """\
 你是 Ming（明），一个增强人类 System 2 思维的 AI 助手。
@@ -123,7 +144,6 @@ class Agent:
         self.automaticity = AutomaticityStore()
         self.memory = MemoryStore()
         self.experience = ExperienceStore()
-        self.loop_detector = LoopDetector()
         self.progress_tracker = ProgressTracker()
         self.permission_gate = PermissionGate()
         self.tool_selector = ToolSelector()
@@ -143,6 +163,7 @@ class Agent:
         # Initialize context layers
         full_system = SYSTEM_PROMPT + "\n" + T2_BIAS_CHECKLIST
         self.context.set_base(full_system)
+        self._compaction_failures = 0
 
         # Load memory into session layer
         self.set_context_scopes(self.active_context_scopes)
@@ -159,6 +180,13 @@ class Agent:
         self._changed_files = set()
         self.session_trace.begin_turn(self.current_turn_id, user_input)
         self._emit_progress("context", "准备上下文")
+        removed_legacy_context = self._sanitize_workspace_context()
+        if removed_legacy_context:
+            self._emit_progress(
+                "context",
+                "清理旧权限误判",
+                detail=f"removed={removed_legacy_context}",
+            )
         todo = TodoState.from_user_input(user_input)
         notepad_path = self.notepad.create(self.current_turn_id, user_input)
         self.notepad.add_assumption(notepad_path, "本轮只把高信号工作台信息注入上下文。")
@@ -275,7 +303,6 @@ class Agent:
         execution_guard_used = False
         t3_repair_attempted = False
         tool_strategy_replan_attempted = False
-        self.loop_detector.reset()
         self.progress_tracker.reset()
         selected_tool_names = self.tool_selector.select_tool_names(user_input, self.tools.names())
         selected_tool_schemas = self.tools.schemas_for(selected_tool_names)
@@ -341,6 +368,18 @@ class Agent:
                 f"模型返回，第 {iteration} 轮",
                 detail=self._summarize_llm_response(response),
             )
+            turn_cost = self.session_trace._estimate_cost()
+            if (
+                self.config.agent.max_cost_per_turn > 0
+                and turn_cost > self.config.agent.max_cost_per_turn
+            ):
+                self.session_trace.record_l5_ceiling("cost_budget")
+                msg = (
+                    f"[Ming: 本轮估算成本 ${turn_cost:.2f} 超过预算 "
+                    f"${self.config.agent.max_cost_per_turn:.2f}，停止执行]"
+                )
+                self.context.add_message(Message(role="assistant", content=msg))
+                return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
 
             # Case 1: Tool calls → execute and loop
             if response.tool_calls:
@@ -359,27 +398,8 @@ class Agent:
                     tool_args = func["arguments"]
                     self._emit_progress("tool", f"执行工具 {tool_name}", detail=tool_args)
 
-                    # Loop detection (L5 fingerprint layer)
-                    loop_status = self.loop_detector.check(tool_name, tool_args)
-
-                    if loop_status == "block":
-                        result = ToolResult(
-                            output=f"[Loop detected] Tool {tool_name} has been called identically "
-                                   f"{self.loop_detector._consecutive_identical} times. "
-                                   "You must try a completely different approach.",
-                            is_error=True,
-                        )
-                    elif loop_status == "warn":
-                        # Execute but inject warning
-                        result = await self._execute_permitted_tool(tool_name, tool_args)
-                        result = ToolResult(
-                            output=result.output + "\n\n[Warning: You've called this tool with "
-                            "identical parameters multiple times. Consider a different approach.]",
-                            is_error=result.is_error,
-                        )
-                    else:
-                        # L1: Normal execution (harness handles transient retries via LiteLLM)
-                        result = await self._execute_permitted_tool(tool_name, tool_args)
+                    loop_status = "not_checked"
+                    result = await self._execute_permitted_tool(tool_name, tool_args)
 
                     tool_latency_ms = int((time.monotonic() - llm_t0) * 1000) - llm_latency_ms
                     step_tool_traces.append(ToolCallTrace(
@@ -387,7 +407,7 @@ class Agent:
                         name=tool_name,
                         arguments=tool_args,
                         loop_status=loop_status,
-                        consecutive_identical=self.loop_detector._consecutive_identical,
+                        consecutive_identical=0,
                         result_output_length=len(result.output),
                         result_is_error=result.is_error,
                         latency_ms=max(0, tool_latency_ms),
@@ -437,15 +457,18 @@ class Agent:
                         tool_call_id=tc["id"],
                     ))
 
-                    if assessment.decision == "stop":
-                        failure = format_tool_stall(assessment, self.progress_tracker.events)
-                        msg = failure.user_message
+                    if assessment.decision in {"nudge", "nudge_strong"}:
+                        hint = self._build_progress_nudge_prompt(assessment)
+                        self._emit_progress(
+                            "observe",
+                            "进展有限，注入策略提示",
+                            detail=assessment.reason,
+                        )
                         self.notepad.add_blocker(
                             notepad_path,
-                            f"tool_stall: {failure.technical_detail}",
+                            f"progress_nudge: {assessment.reason}",
                         )
-                        self.context.add_message(Message(role="assistant", content=msg))
-                        return self._finish_turn(msg, todo, notepad_path, complete_todo=False)
+                        self.context.add_message(Message(role="user", content=hint))
 
                     if (
                         assessment.decision == "replan"
@@ -611,6 +634,7 @@ class Agent:
             for message in restored
             if not (message.role == "system" and message.content in base_content)
         ]
+        self._sanitize_workspace_context()
         self.last_checkpoint_path = path
         return payload
 
@@ -715,12 +739,35 @@ class Agent:
         return text[: max_chars - 1].rstrip() + "…"
 
     def _build_instant_context(self, user_input: str) -> str:
+        workspace_status = "exists" if self.workspace_root.exists() else "missing"
         return (
             f"当前用户请求：{user_input}\n"
             f"当前工作文件夹：{self.workspace_root}\n"
+            f"工作文件夹状态：{workspace_status}\n"
             "你可以通过工具在当前工作文件夹中读写文件；不要把本机工作台描述为沙盒。\n"
+            "相对路径必须按当前工作文件夹解析；用户给出绝对路径时，可以先使用工具验证路径是否存在、是否可读写。\n"
+            "除非 file_read/file_write/file_edit/bash 返回权限错误或路径不存在，"
+            "否则不要要求用户粘贴本地文件内容。\n"
             "只使用和本轮任务相关的工具、记忆、TODO、Notepad 和 pinned evidence。"
         )
+
+    def _sanitize_workspace_context(self) -> int:
+        """Drop stale assistant claims that Ming cannot access local workspace files."""
+        before = len(self.context.dialog_history)
+        self.context.dialog_history = [
+            message
+            for message in self.context.dialog_history
+            if not self._is_stale_workspace_denial(message)
+        ]
+        return before - len(self.context.dialog_history)
+
+    def _is_stale_workspace_denial(self, message: Message) -> bool:
+        if message.role not in {"assistant", "system"}:
+            return False
+        content = message.content or ""
+        has_sandbox_hint = any(hint in content for hint in SANDBOX_DENIAL_HINTS)
+        has_denial_hint = any(hint in content for hint in LOCAL_ACCESS_DENIAL_HINTS)
+        return has_sandbox_hint and has_denial_hint
 
     def _build_tool_strategy_replan_prompt(
         self,
@@ -741,6 +788,15 @@ class Agent:
             "如果内容很长，缩小到必要改动或分块写入。"
         )
 
+    def _build_progress_nudge_prompt(self, assessment) -> str:
+        return (
+            f"[Ming 观察] {assessment.reason}\n"
+            "你可以：1) 换一种工具或参数重试；"
+            "2) 缩小目标并先获取更小证据；"
+            "3) 如果确实需要用户提供信息，明确说明缺什么；"
+            "4) 如果当前方向正确，继续执行并给出证据。"
+        )
+
     async def _run_adversarial(self, user_input: str) -> AdversarialResult:
         """Run adversarial mode (α/β Fork + γ convergence)."""
         logger.info("Running adversarial mode")
@@ -749,8 +805,17 @@ class Agent:
             config=self.config.llm,
         )
 
-    async def _run_compaction(self, trigger: str = "manual") -> None:
+    async def _run_compaction(self, trigger: str = "manual") -> bool:
         """Run context compaction with LLM summarization."""
+        if self._compaction_failures >= MAX_CONSECUTIVE_COMPACTION_FAILURES:
+            logger.warning("Compaction circuit breaker tripped, skipping")
+            self._emit_progress(
+                "context",
+                "压缩熔断，跳过本次压缩",
+                detail=f"failures={self._compaction_failures}",
+            )
+            return False
+
         tokens_before = self.context.current_tokens()
         messages_before = len(self.context.dialog_history)
 
@@ -761,12 +826,37 @@ class Agent:
             )
 
         compact_t0 = time.monotonic()
-        await self.context.compact(_compact_llm_call)
+        try:
+            await self.context.compact(_compact_llm_call)
+        except Exception:
+            self._compaction_failures += 1
+            logger.warning(
+                "Compaction failed (%d/%d)",
+                self._compaction_failures,
+                MAX_CONSECUTIVE_COMPACTION_FAILURES,
+                exc_info=True,
+            )
+            return False
         compact_latency = int((time.monotonic() - compact_t0) * 1000)
 
         tokens_after = self.context.current_tokens()
         messages_after = len(self.context.dialog_history)
         ratio = round(tokens_after / max(tokens_before, 1), 2)
+
+        if (
+            messages_before >= 6
+            and tokens_after >= tokens_before
+            and messages_after >= messages_before
+        ):
+            self._compaction_failures += 1
+            logger.warning(
+                "Compaction made no progress (%d/%d)",
+                self._compaction_failures,
+                MAX_CONSECUTIVE_COMPACTION_FAILURES,
+            )
+            return False
+
+        self._compaction_failures = 0
 
         self.session_trace.record_compaction(CompactionEvent(
             timestamp=datetime.now().isoformat(timespec="seconds"),
@@ -780,6 +870,7 @@ class Agent:
             phase2_ran=True,
             phase2_metrics=LLMCallMetrics(latency_ms=compact_latency),
         ))
+        return True
 
     async def compact_now(self) -> None:
         """Public CLI hook for manual compaction."""

@@ -1,8 +1,8 @@
 from ming.core.progress import ProgressTracker, ToolEvent
 
 
-def test_progress_tracker_stops_after_three_no_signal_events_for_same_goal():
-    tracker = ProgressTracker(max_no_signal_streak=3)
+def test_progress_tracker_nudges_after_repeated_no_signal_events():
+    tracker = ProgressTracker(max_no_signal_streak=5, strong_nudge_threshold=8)
 
     decisions = [
         tracker.record(
@@ -15,13 +15,33 @@ def test_progress_tracker_stops_after_three_no_signal_events_for_same_goal():
                 progress="no_signal",
             )
         )
-        for _ in range(3)
+        for _ in range(8)
     ]
 
-    assert decisions[0].decision == "continue"
-    assert decisions[1].decision == "continue"
-    assert decisions[2].decision == "stop"
-    assert "连续" in decisions[2].reason
+    assert [decision.decision for decision in decisions[:4]] == ["continue"] * 4
+    assert decisions[4].decision == "nudge"
+    assert decisions[5].decision == "continue"
+    assert decisions[6].decision == "continue"
+    assert decisions[7].decision == "nudge_strong"
+    assert "连续" in decisions[4].reason
+
+
+def test_tool_event_treats_successful_write_and_shell_as_progress():
+    write_event = ToolEvent.from_tool_result(
+        tool_name="file_write",
+        tool_args='{"path": "out.txt", "content": "ok"}',
+        output="ok",
+        is_error=False,
+    )
+    shell_event = ToolEvent.from_tool_result(
+        tool_name="bash",
+        tool_args='{"command": "python -m pytest"}',
+        output="OK",
+        is_error=False,
+    )
+
+    assert write_event.progress == "new_evidence"
+    assert shell_event.progress == "new_evidence"
 
 
 def test_tool_event_classifies_web_search_evidence_from_json_output():

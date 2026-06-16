@@ -177,12 +177,12 @@ Ming 会根据用户输入动态缩小暴露给模型的工具集合，减少 to
 
 每次工具调用会生成 `ToolEvent`，记录工具名、状态、输出长度、证据数量和进展类型。`ProgressAssessment` 会判断这一步是否推进任务：
 
-- `new_evidence`：拿到了有效证据。
-- `no_signal`：空输出、短输出或失败。
+- `new_evidence`：拿到了有效证据，或写入/编辑/bash/file_read 成功产生了可用结果。
+- `no_signal`：工具调用确实没有产生可用信息，例如空输出。
 - `artifact_noise`：产生大量内容但没有结构化证据。
 - `unknown`：有输出但还无法判断。
 
-连续多次 `no_signal/artifact_noise` 会暂停本轮工具循环，避免换关键词、爬 HTML、读大文件这类策略空转。用户界面会显示“为什么暂停、刚才主要尝试了哪些工具、下一步如何继续”；原始 `no_signal` 诊断保留在 trace/notepad 详情中。
+连续多次 `no_signal/artifact_noise` 不再直接暂停本轮工具循环，而是先向 agent-loop 注入软提示：5 次进入 `nudge`，8 次进入 `nudge_strong`，建议模型换工具、缩小目标或向用户确认方向。真正的硬停止由 L5 上限负责，包括 `max_iterations`、`max_seconds` 和 `max_cost_per_turn`。工具参数格式错误或不可靠写入策略仍会触发一次 `replan`，要求模型改用更稳定的工具调用方式。
 
 这些事件会保存到 `.ming/session_traces/<session_id>.json`，方便复盘 agent-loop 每轮到底做了什么。
 Trace 还会记录 observations 和 assessments；交互模式用 `/trace` 可以查看最近 SessionTrace 文件路径。
@@ -293,7 +293,9 @@ Ming 支持 metadata-only 的 `SkillIndex`：只加载 name、description、trus
 - Experience Pool 历史分歧检索。
 - Web search / fetch 结构化输出。
 - Web research evidence pack、domain allow/deny、freshness filter。
-- ProgressAssessment 停止无增益工具循环。
+- ProgressAssessment 对无增益工具循环注入 `nudge` / `nudge_strong` 软提示。
+- L5 成本预算 `max_cost_per_turn`。
+- Context 压缩连续失败 circuit breaker。
 - PermissionGate 阻断高风险 shell 命令。
 - 动态工具选择。
 - 本地页面生成类任务的工具集收敛。

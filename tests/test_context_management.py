@@ -213,3 +213,24 @@ async def test_agent_uses_context_workbench_and_can_resume_checkpoint(tmp_path, 
     assert checkpoint is not None
     assert len(resumed.context.dialog_history) > 0
     assert resumed.last_checkpoint_path is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_compaction_circuit_breaker_stops_repeated_failures(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = MingConfig(llm=LLMConfig(model="test-model", api_key="test"))
+    agent = Agent(config=config, working_dir=str(tmp_path))
+    calls = 0
+
+    async def failing_compact(llm_call):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("compaction failed")
+
+    monkeypatch.setattr(agent.context, "compact", failing_compact)
+
+    assert await agent._run_compaction(trigger="safety") is False
+    assert await agent._run_compaction(trigger="safety") is False
+    assert await agent._run_compaction(trigger="safety") is False
+    assert await agent._run_compaction(trigger="safety") is False
+    assert calls == 3

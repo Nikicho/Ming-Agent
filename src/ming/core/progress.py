@@ -37,36 +37,45 @@ class ToolEvent:
             )
 
         evidence_count = _count_evidence(output)
-        if evidence_count > 0:
+        if tool_name in {"file_write", "file_edit"}:
             progress = "new_evidence"
-        elif output_chars <= 20:
-            progress = "no_signal"
+        elif tool_name == "bash" and output_chars > 0:
+            progress = "new_evidence"
+        elif tool_name == "file_read" and output_chars > 0:
+            progress = "new_evidence"
+        elif evidence_count > 0:
+            progress = "new_evidence"
         elif tool_name in {"web_search", "web_fetch"}:
-            progress = "artifact_noise"
-        else:
+            progress = "unknown" if output_chars > 100 else "artifact_noise"
+        elif output_chars > 20:
             progress = "unknown"
+        else:
+            progress = "no_signal"
 
         return cls(tool_name, action, "ok", output_chars, evidence_count, progress)
 
 
 @dataclass
 class ProgressAssessment:
-    decision: str  # continue, replan, stop
+    decision: str  # continue, replan, nudge, nudge_strong
     reason: str
 
 
 class ProgressTracker:
-    def __init__(self, max_no_signal_streak: int = 3):
+    def __init__(self, max_no_signal_streak: int = 5, strong_nudge_threshold: int = 8):
         self.max_no_signal_streak = max_no_signal_streak
+        self.strong_nudge_threshold = strong_nudge_threshold
         self.no_signal_streak = 0
         self.tool_strategy_failure_streak = 0
         self._strategy_replan_emitted = False
+        self._nudge_streak_emitted = 0
         self.events: list[ToolEvent] = []
 
     def reset(self) -> None:
         self.no_signal_streak = 0
         self.tool_strategy_failure_streak = 0
         self._strategy_replan_emitted = False
+        self._nudge_streak_emitted = 0
         self.events = []
 
     def record(self, event: ToolEvent) -> ProgressAssessment:
@@ -100,12 +109,29 @@ class ProgressTracker:
                 ),
             )
 
-        if self.no_signal_streak >= self.max_no_signal_streak:
+        if (
+            self.no_signal_streak >= self.strong_nudge_threshold
+            and self._nudge_streak_emitted < self.strong_nudge_threshold
+        ):
+            self._nudge_streak_emitted = self.no_signal_streak
             return ProgressAssessment(
-                decision="stop",
+                decision="nudge_strong",
                 reason=(
-                    f"连续 {self.no_signal_streak} 次工具调用没有产生有效新证据，"
-                    "停止继续尝试同类策略。"
+                    f"连续 {self.no_signal_streak} 次工具调用进展有限，"
+                    "强烈建议换一种方法、缩小目标，或向用户确认方向。"
+                ),
+            )
+
+        if (
+            self.no_signal_streak >= self.max_no_signal_streak
+            and self._nudge_streak_emitted < self.max_no_signal_streak
+        ):
+            self._nudge_streak_emitted = self.no_signal_streak
+            return ProgressAssessment(
+                decision="nudge",
+                reason=(
+                    f"连续 {self.no_signal_streak} 次工具调用进展有限，"
+                    "考虑是否需要调整策略。"
                 ),
             )
 
