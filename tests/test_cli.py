@@ -56,8 +56,8 @@ def test_setup_logging_suppresses_noisy_provider_console_logs(tmp_path, monkeypa
 
     cli._setup_logging("INFO")
 
-    assert logging.getLogger("LiteLLM").getEffectiveLevel() >= logging.WARNING
-    assert logging.getLogger("litellm").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("asyncio").getEffectiveLevel() >= logging.WARNING
     assert cli._should_ignore_asyncio_exception({
         "exception": ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。")

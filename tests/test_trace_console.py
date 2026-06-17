@@ -98,6 +98,9 @@ def test_trace_console_app_renders_index_and_json(tmp_path):
     assert "renderRunTimeline" in html
     assert "renderMarkdown" in html
     assert "isMarkdownSeparator" in html
+    assert "renderMarkdownTable" in html
+    assert "isMarkdownTableStart" in html
+    assert "留空时按 DeepSeek/GLM/MiniMax 推断" in html
     assert "classifyReplyStatus" in html
     assert "计划说明" in html
     assert "暂无产物" in html
