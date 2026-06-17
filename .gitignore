@@ -36,3 +36,18 @@ htmlcov/
 
 # Local web-search scratch files
 bing*.html
+
+# Scratch / temp files
+scratch/
+
+# IDE
+.claude/
+
+# Standalone scripts (not part of the package)
+kawaii_writer.py
+write_pomo.py
+pomodoro.html
+pomodoro-timer/
+
+# Demo files
+docs/demo/
